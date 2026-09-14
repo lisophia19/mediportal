@@ -2,7 +2,8 @@
 
 **This is not the spec.** The baseline spec is
 `docs/design/spec-ortho-baseline-demo.md`, which covers only the minimum needed for one
-working Vogent demo call (ortho routing, 3 doctors, ~12 terms, no deployment).
+working Vogent demo call (ortho routing, all 10 Long Island Bone and Joint providers,
+247 terms, no deployment).
 
 This file is a running parking lot for everything the *eventual* product needs that was
 deliberately cut from the baseline. It was stubbed from the obvious deferrals — add to
@@ -18,15 +19,32 @@ it freely as more requirements surface. Nothing here is committed to or schedule
   PT is usually referral-driven and script-bound, not "pick a therapist by issue."
 - **Pain Management, Physiatry, Joint Reconstruction** and the other non-ortho
   specialties in `Provider Info`.
-- **Full provider directory.** Baseline seeds 3 doctors; the spreadsheet has ~90.
-  Loading all of them means confronting the data-quality issues `seed_mediportal.py`
-  already logs as warnings (name mismatches between sheets, unrecognized age values,
-  practices that don't resolve).
-- **Urgent-path routing.** The `Urgency` column is seeded and displayed but does nothing
-  in baseline. Real behavior: URGENT terms should probably bypass normal availability,
-  offer same/next-day slots, or route to an urgent-care site with different hours (the
-  `urgent_hours` / `evening_hours` / `weekend_hours` fields on `Practice Information`
-  exist for this).
+- **Full provider directory.** Baseline seeds all 10 Long Island Bone and Joint
+  providers; the spreadsheet has ~90 across other practice groups. Loading all of them
+  means confronting the data-quality issues `seed_mediportal.py` already logs as
+  warnings (name mismatches between sheets, unrecognized age values, practices that
+  don't resolve).
+- **Urgent scheduling beyond a 3-day window.** Baseline enforces "try to get an urgent
+  patient in within 3 days" (widening to 14 with an honest caveat if nothing's sooner —
+  spec §5.5). Real behavior for the case that caveat represents — an urgent complaint
+  with nothing available even in the wider window — needs an actual resolution, not
+  just an apology: either rearrange/bump the doctor's schedule to fit the patient in, or
+  redirect the caller to the practice's actual scheduling desk (phone number) so a human
+  can do what the automated system can't. Baseline doesn't do either — it just offers
+  the best available late slot with a spoken caveat. Also still deferred: routing
+  URGENT terms to an urgent-care site with different hours (the `urgent_hours` /
+  `evening_hours` / `weekend_hours` fields on `Practice Information` exist for this but
+  are unused).
+- **Appointment type doesn't distinguish "existing patient, new issue" from "brand-new
+  patient" or "follow-up."** `appointment_type` (and its duration) currently comes
+  purely from the matched term (`urgent` or `new_patient_consult` — `follow_up` is
+  defined but never actually assigned by the seed data). A returning patient calling
+  about a non-urgent issue that isn't a tracked follow-up gets the same
+  `new_patient_consult` duration/label as a brand-new patient, which isn't right.
+  Deliberately left as-is for the baseline (decided during Phase 1 review); real product
+  needs a duration/label decision that accounts for patient-is-new vs. returning, most
+  naturally driven by whether `/patients/lookup` returned `found` vs. created a new
+  record.
 - **Onsite-service matching.** A patient needing an X-ray or MRI at the visit should be
   routed to a practice with `has_xray` / `has_mri`. Data is already modeled; matching
   logic is not.
@@ -37,9 +55,12 @@ it freely as more requirements surface. Nothing here is committed to or schedule
 
 - **Reschedule and cancellation** over the phone. Needs appointment lookup by patient,
   plus a cancellation policy and slot release.
-- **Human escalation / warm transfer.** Baseline ends the call with "someone will call
-  you back." Real product needs a transfer target — the `Directory` sheet has per-
-  location contacts and desk numbers specifically for this.
+- **Human escalation / warm transfer.** Baseline gives callers a real desk number to
+  call back for the routing dead ends that have one (`not_covered`/`age_restricted` via
+  the §5.9 directory redirect), but never actually transfers the live call — the caller
+  has to hang up and redial. Genuine warm transfer (keeping the caller on the line) is
+  deferred, as is any redirect/desk-number fallback for the urgent-no-slots case noted
+  above under Clinical scope.
 - **Callback queue.** Every baseline dead end (`no_match`, `no_slots`, `failed`) should
   create a real work item for staff, not just a logged call status.
 - **Multi-appointment calls.** Caller booking for a spouse or child, or booking two

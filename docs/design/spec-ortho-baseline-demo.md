@@ -728,9 +728,11 @@ Success response includes the full confirmation payload the agent reads back:
   "confirmation": { "doctor": "Dr. Bennett Brown", "practice": "Merrick",
                     "address": "1728 Sunrise Highway, Merrick",
                     "when": "Wednesday, September 17th at 10:30 AM",
-                    "appointment_type": "New patient consultation",
-                    "arrive_minutes_early": 15 } }
+                    "appointment_type": "New patient consultation" } }
 ```
+
+`arrive_minutes_early` was dropped from this baseline (not needed for the demo call) --
+revisit if the flow ever needs to tell callers when to arrive.
 
 ### 5.7 Call capture
 
@@ -744,8 +746,10 @@ Success response includes the full confirmation payload the agent reads back:
 - `POST /calls/{vogent_call_id}/complete` — Vogent's end-of-call webhook: full
   transcript, `ended_at`, final status. Idempotent on `vogent_call_id`.
 
-A call left `in_progress` with no update for 15 minutes is swept to `abandoned` by a
-simple periodic job.
+A call left `in_progress` with no update for 15 minutes is swept to `abandoned`. Baseline
+implementation: lazily, from the dashboard's read routes (`GET /calls`, `GET /calls/{id}`)
+rather than a real background scheduler -- cheap at this data volume, and means a caller
+hanging up mid-call is reflected correctly the next time anyone opens the dashboard.
 
 ### 5.8 Dashboard endpoints
 
