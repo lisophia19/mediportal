@@ -3,6 +3,15 @@
 # "Open decisions" for why no AWS-specific config exists here.
 import os
 
+from dotenv import load_dotenv
+
+# Searches the current directory and its parents for a .env file (so this
+# works whether Flask is launched from the repo root or from backend/) --
+# python-dotenv was already a dependency but nothing was actually calling
+# this, so a real .env file was silently ignored and every var had to be
+# exported by hand.
+load_dotenv()
+
 
 class Config:
     SQLALCHEMY_DATABASE_URI = os.environ.get(
