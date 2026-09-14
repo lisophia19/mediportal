@@ -11,6 +11,13 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date, datetime
 
+# Shared defaults for a slot lookup: how far out to look and how many to
+# return, used by both the availability route (§5.5) and this interface's
+# baseline provider's own alternates lookup on a booking race (§5.6) -- one
+# definition instead of each declaring its own copy of the same two numbers.
+NORMAL_WINDOW_DAYS = 14
+DEFAULT_SLOT_LIMIT = 3
+
 
 @dataclass
 class SlotResult:
