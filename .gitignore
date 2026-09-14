@@ -1,0 +1,10 @@
+.claude
+.venv
+test_venv
+__pycache__/
+*.pyc
+.env
+~$*.xlsx
+.DS_Store
+node_modules/
+frontend/dist/

@@ -1,0 +1,41 @@
+# Local dev only — no AWS/deployment wiring here (spec §1, plan Phase 0).
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-mediportal}
+      POSTGRES_USER: ${POSTGRES_USER:-mediportal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mediportal}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mediportal}:${POSTGRES_PASSWORD:-mediportal}@postgres:5432/${POSTGRES_DB:-mediportal}
+      JWT_SECRET: ${JWT_SECRET}
+      LLM_API_KEY: ${LLM_API_KEY}
+      SCHEDULING_PROVIDER: ${SCHEDULING_PROVIDER:-postgres}
+    ports:
+      - "5000:5000"
+    depends_on:
+      - postgres
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:5000/api/v1}
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
