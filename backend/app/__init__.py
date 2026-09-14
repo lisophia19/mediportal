@@ -48,7 +48,12 @@ def _register_scheduling_provider(app):
     importing a concrete provider class directly -- that's the whole point
     of the interface (a future real-EHR provider swaps in here only).
 
-    Phase 0 stub: no concrete provider exists yet, so this is a no-op until
-    Phase 1 adds PostgresSchedulingProvider.
+    "postgres" is the only implementation built so far -- see
+    app/providers/postgres_scheduling.py.
     """
-    app.extensions.setdefault("scheduling_provider", None)
+    if app.config.get("SCHEDULING_PROVIDER") == "postgres":
+        from .providers.postgres_scheduling import PostgresSchedulingProvider
+
+        app.extensions["scheduling_provider"] = PostgresSchedulingProvider()
+    else:
+        app.extensions.setdefault("scheduling_provider", None)

@@ -4,3 +4,7 @@ Flask-Migrate==4.0.7
 psycopg2-binary==2.9.13
 python-dotenv==1.0.1
 openpyxl==3.1.5
+PyJWT==2.9.0
+anthropic==0.34.2
+rapidfuzz==3.9.7
+pytest==8.3.3
