@@ -94,6 +94,42 @@ def test_match_issue_matched(client, db, agent_headers, monkeypatch):
     assert body["status"] == "matched"
     assert body["term"]["id"] == term.id
     assert "confirm_prompt" in body
+    # No runner-up in this mocked payload -- alternates are nullable.
+    assert body["alternate_1_id"] is None
+
+
+def test_match_issue_matched_includes_flat_alternates(client, db, agent_headers, monkeypatch):
+    """The Vogent flow needs these as scalar inputs if the caller says the
+    top match is wrong -- offer the runner-up(s) instead of just re-asking
+    from scratch. Flat fields, not a nested array, since flow templates
+    cannot index into an array as a downstream function input."""
+    term_top = _make_term(db, term="Fracture-Wrist")
+    term_alt1 = _make_term(db, term="Pain-Wrist", category="pain")
+    term_alt2 = _make_term(db, term="Osteo/Arthritis-Wrist", category="Arthritis/Osteoarthritis")
+    db.commit()
+    _mock_llm(
+        monkeypatch,
+        {
+            "ortho_relevant": True,
+            "matches": [
+                {"term_id": term_top.id, "confidence": 0.9, "spoken_label": "a possible wrist fracture"},
+                {"term_id": term_alt1.id, "confidence": 0.4, "spoken_label": "wrist pain"},
+                {"term_id": term_alt2.id, "confidence": 0.3, "spoken_label": "wrist arthritis"},
+            ],
+        },
+    )
+
+    resp = client.post(
+        "/api/v1/routing/match-issue",
+        json={"complaint_text": "my wrist hurts", "call_id": "vg_1"},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched"
+    assert body["alternate_1_id"] == term_alt1.id
+    assert body["alternate_1_label"] == "wrist pain"
+    assert body["alternate_2_id"] == term_alt2.id
+    assert body["alternate_2_label"] == "wrist arthritis"
 
 
 def test_match_issue_handles_leading_thinking_block(client, db, agent_headers, monkeypatch):

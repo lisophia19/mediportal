@@ -193,12 +193,26 @@ def match_issue():
     gap_clears = len(matches) == 1 or (top.get("confidence", 0) - matches[1].get("confidence", 0)) >= MATCH_GAP
     if top.get("confidence", 0) >= MATCH_CONFIDENCE and gap_clears:
         confirm_prompt = f"It sounds like this is {top.get('spoken_label', top_term.term)} -- is that right?"
+        # Runner-up candidates, flattened (not a nested array) so the Vogent
+        # flow can reference them as scalar inputs if the caller says the
+        # top match is wrong (spec: offer alternatives rather than just
+        # re-asking from scratch). Nullable -- often there is no runner-up.
+        alternates = {}
+        for i, match in enumerate(matches[1:3], start=1):
+            term = terms_by_id.get(match.get("term_id"))
+            if term is not None:
+                alternates[f"alternate_{i}_id"] = term.id
+                alternates[f"alternate_{i}_label"] = match.get("spoken_label", term.term)
         return jsonify(
             {
                 "status": "matched",
                 "term": _term_payload(top_term),
                 "confidence": top.get("confidence"),
                 "confirm_prompt": confirm_prompt,
+                "alternate_1_id": alternates.get("alternate_1_id"),
+                "alternate_1_label": alternates.get("alternate_1_label"),
+                "alternate_2_id": alternates.get("alternate_2_id"),
+                "alternate_2_label": alternates.get("alternate_2_label"),
             }
         )
 
