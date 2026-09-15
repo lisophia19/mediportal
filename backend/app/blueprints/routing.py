@@ -124,7 +124,20 @@ def _classify_complaint(complaint_text, candidates):
     text_block = next((block for block in response.content if block.type == "text"), None)
     if text_block is None:
         raise ValueError(f"no text block in Anthropic response: {response.content!r}")
-    return json.loads(text_block.text)
+    return json.loads(_strip_markdown_fence(text_block.text))
+
+
+def _strip_markdown_fence(text):
+    """The model sometimes wraps its JSON answer in a ```json ... ``` fence
+    despite being told to respond with only JSON -- real production traffic
+    hit this. Strip it defensively rather than relying on the model always
+    following that instruction."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+        if text.endswith("```"):
+            text = text.rsplit("```", 1)[0]
+    return text.strip()
 
 
 def _term_payload(term):

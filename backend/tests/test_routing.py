@@ -122,6 +122,31 @@ def test_match_issue_handles_leading_thinking_block(client, db, agent_headers, m
     assert body["term"]["id"] == term.id
 
 
+def test_match_issue_handles_markdown_fenced_json(client, db, agent_headers, monkeypatch):
+    """Regression test: real production traffic showed the model wrapping
+    its JSON answer in a ```json fence despite being told not to."""
+    term = _make_term(db)
+    db.commit()
+    payload = {
+        "ortho_relevant": True,
+        "matches": [{"term_id": term.id, "confidence": 0.92, "spoken_label": "a possible wrist fracture"}],
+    }
+    fenced_message = _FakeMessage("```json\n" + json.dumps(payload) + "\n```")
+    fake_client = _FakeClient(payload)
+    fake_client.messages.create = lambda **kwargs: fenced_message
+    monkeypatch.setattr(routing_module, "_anthropic_client", lambda: fake_client)
+
+    resp = client.post(
+        "/api/v1/routing/match-issue",
+        json={"complaint_text": "I fell and my wrist is killing me", "call_id": "vg_1"},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert body["status"] == "matched"
+    assert body["term"]["id"] == term.id
+
+
 def test_match_issue_needs_clarification(client, db, agent_headers, monkeypatch):
     term_a = _make_term(db, term="Fracture-Wrist")
     term_b = _make_term(db, term="Pain-Wrist", category="pain")
@@ -179,6 +204,14 @@ def test_match_issue_llm_unavailable_returns_503(client, db, agent_headers, monk
     )
     assert resp.status_code == 503
     assert resp.get_json()["status"] == "error"
+
+
+def test_strip_markdown_fence():
+    strip = routing_module._strip_markdown_fence
+    assert strip('{"a": 1}') == '{"a": 1}'
+    assert strip('```json\n{"a": 1}\n```') == '{"a": 1}'
+    assert strip('```\n{"a": 1}\n```') == '{"a": 1}'
+    assert strip('  {"a": 1}  ') == '{"a": 1}'
 
 
 # --- §5.2 find-doctors + §5.9 directory redirect ------------------------
