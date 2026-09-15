@@ -23,25 +23,35 @@ from app.models import (
 
 
 class _FakeMessage:
-    def __init__(self, text):
-        self.content = [type("Block", (), {"text": text})()]
+    def __init__(self, text, with_thinking_block=False):
+        blocks = []
+        if with_thinking_block:
+            # Claude sometimes reasons before answering on more complex
+            # prompts -- the thinking block has no .text, or an unrelated
+            # one, and must not be mistaken for the real answer.
+            blocks.append(type("Block", (), {"type": "thinking", "text": None})())
+        blocks.append(type("Block", (), {"type": "text", "text": text})())
+        self.content = blocks
 
 
 class _FakeMessages:
-    def __init__(self, payload):
+    def __init__(self, payload, with_thinking_block=False):
         self._payload = payload
+        self._with_thinking_block = with_thinking_block
 
     def create(self, **kwargs):
-        return _FakeMessage(json.dumps(self._payload))
+        return _FakeMessage(json.dumps(self._payload), self._with_thinking_block)
 
 
 class _FakeClient:
-    def __init__(self, payload):
-        self.messages = _FakeMessages(payload)
+    def __init__(self, payload, with_thinking_block=False):
+        self.messages = _FakeMessages(payload, with_thinking_block)
 
 
-def _mock_llm(monkeypatch, payload):
-    monkeypatch.setattr(routing_module, "_anthropic_client", lambda: _FakeClient(payload))
+def _mock_llm(monkeypatch, payload, with_thinking_block=False):
+    monkeypatch.setattr(
+        routing_module, "_anthropic_client", lambda: _FakeClient(payload, with_thinking_block)
+    )
 
 
 def _make_term(db, **overrides):
@@ -84,6 +94,32 @@ def test_match_issue_matched(client, db, agent_headers, monkeypatch):
     assert body["status"] == "matched"
     assert body["term"]["id"] == term.id
     assert "confirm_prompt" in body
+
+
+def test_match_issue_handles_leading_thinking_block(client, db, agent_headers, monkeypatch):
+    """Regression test: Claude sometimes reasons in a `thinking` block
+    before the `text` block on more complex prompts (real production traffic
+    hit this) -- content[0] is not reliably the text block."""
+    term = _make_term(db)
+    db.commit()
+    _mock_llm(
+        monkeypatch,
+        {
+            "ortho_relevant": True,
+            "matches": [{"term_id": term.id, "confidence": 0.92, "spoken_label": "a possible wrist fracture"}],
+        },
+        with_thinking_block=True,
+    )
+
+    resp = client.post(
+        "/api/v1/routing/match-issue",
+        json={"complaint_text": "I fell and my wrist is killing me", "call_id": "vg_1"},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert body["status"] == "matched"
+    assert body["term"]["id"] == term.id
 
 
 def test_match_issue_needs_clarification(client, db, agent_headers, monkeypatch):

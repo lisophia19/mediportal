@@ -117,7 +117,14 @@ def _classify_complaint(complaint_text, candidates):
         max_tokens=500,
         messages=[{"role": "user", "content": prompt}],
     )
-    return json.loads(response.content[0].text)
+    # The model sometimes reasons in a `thinking` block before the `text`
+    # block on more complex prompts (candidate-list length seems to be the
+    # trigger) -- content[0] is not reliably the text block, so find it by
+    # type rather than assuming position.
+    text_block = next((block for block in response.content if block.type == "text"), None)
+    if text_block is None:
+        raise ValueError(f"no text block in Anthropic response: {response.content!r}")
+    return json.loads(text_block.text)
 
 
 def _term_payload(term):
