@@ -8,10 +8,16 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-mediportal}
       POSTGRES_USER: ${POSTGRES_USER:-mediportal}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mediportal}
-    ports:
-      - "5432:5432"
+    # Not published to the host -- only the backend container talks to this,
+    # over the internal docker network. Local dev connects via `docker
+    # compose exec postgres psql` rather than a host port.
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mediportal} -d ${POSTGRES_DB:-mediportal}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   backend:
     build: ./backend
@@ -26,7 +32,14 @@ services:
     ports:
       - "5000:5000"
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   frontend:
     build:
@@ -37,7 +50,10 @@ services:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:5000/api/v1}
     restart: unless-stopped
     ports:
-      - "8080:80"
+      # Loopback-only -- reached exclusively through Caddy (TLS termination
+      # + hostname), which reverse-proxies here the same way it proxies
+      # /api/* to the backend. Not meant to be reachable directly.
+      - "127.0.0.1:8080:80"
     depends_on:
       - backend
 

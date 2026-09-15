@@ -1,5 +1,9 @@
 FROM python:3.12-slim
 
+# curl is used by docker-compose.yml's healthcheck, not by the app itself.
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY requirements.txt ./
