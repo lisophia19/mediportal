@@ -193,6 +193,11 @@ def test_find_doctors_matched_ranks_by_distance(client, db, agent_headers):
     assert body["status"] == "matched"
     assert body["doctors"][0]["doctor_id"] == doc_near.id
     assert body["doctors"][0]["distance_miles"] < body["doctors"][1]["distance_miles"]
+    # Flat top-choice fields for the Vogent flow, which cannot index into
+    # the doctors array as a downstream function input (see routing.py).
+    assert body["best_doctor_id"] == doc_near.id
+    assert body["best_practice_id"] == near.id
+    assert body["best_doctor_spoken_label"] == body["doctors"][0]["spoken_label"]
 
 
 def test_find_doctors_falls_back_to_term_id_recorded_on_call(client, db, agent_headers):

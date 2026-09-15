@@ -402,4 +402,21 @@ def find_doctors():
         for doctor, practice, distance in ranked
     ]
 
-    return jsonify({"status": "matched", "term_urgency": term.urgency, "doctors": doctors_payload})
+    top = doctors_payload[0]
+    return jsonify(
+        {
+            "status": "matched",
+            "term_urgency": term.urgency,
+            "doctors": doctors_payload,
+            # Flat top-choice fields alongside the full ranked array: Vogent's
+            # flow templates can interpolate an array into prompt TEXT (for
+            # the model to read) but cannot index into it (doctors[0].x) as a
+            # scalar input to a downstream function -- these give the flow a
+            # scalar doctor_id/practice_id for the top-ranked pair without a
+            # caller-facing choice step, since we always try the closest
+            # eligible doctor first.
+            "best_doctor_id": top["doctor_id"],
+            "best_practice_id": top["practice"]["id"],
+            "best_doctor_spoken_label": top["spoken_label"],
+        }
+    )
