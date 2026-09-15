@@ -24,3 +24,20 @@ def get_agent_json():
         merged.setdefault("vogent_call_id", dial_id)
         merged.setdefault("call_id", dial_id)
     return merged
+
+
+def coerce_int(value):
+    """Vogent's flow templates stringify a declared INTEGER output as
+    "60.000000" (a float-formatting artifact) when interpolated into another
+    function's input, not a clean "60" -- confirmed against a real production
+    call, where this broke every integer-column write (matched_term_id,
+    patient_id, ...) with a Postgres syntax error. Tolerates that shape, a
+    real int/float, or a plain numeric string; returns None for anything
+    else (including None/empty) so callers can still do their own required-
+    field validation."""
+    if value is None or value == "":
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None

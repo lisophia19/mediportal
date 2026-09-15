@@ -5,7 +5,7 @@
 from flask import Blueprint, current_app, jsonify
 
 from ..auth_utils import require_agent_key
-from ..vogent_utils import get_agent_json
+from ..vogent_utils import coerce_int, get_agent_json
 from ..extensions import db
 from ..format_utils import format_doctor_name, format_spoken_datetime, slot_to_dict
 from ..models import Call, Doctor, Practice, Term
@@ -24,9 +24,9 @@ APPOINTMENT_TYPE_LABELS = {
 @require_agent_key
 def book_appointment():
     body = get_agent_json()
-    slot_id = body.get("slot_id")
-    patient_id = body.get("patient_id")
-    term_id = body.get("term_id")
+    slot_id = coerce_int(body.get("slot_id"))
+    patient_id = coerce_int(body.get("patient_id"))
+    term_id = coerce_int(body.get("term_id"))
     vogent_call_id = body.get("call_id")
 
     call = Call.query.filter_by(vogent_call_id=vogent_call_id).first() if vogent_call_id else None

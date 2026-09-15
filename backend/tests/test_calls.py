@@ -52,6 +52,26 @@ def test_patch_call_updates_fields(client, db, agent_headers):
     assert call.matched_term_id == term.id
 
 
+def test_patch_call_accepts_vogent_float_formatted_ids(client, db, agent_headers):
+    """Regression test: a real production call showed Vogent sending
+    matched_term_id/patient_id as "60.000000" strings, not clean integers --
+    this used to 500 on the Postgres integer column write."""
+    term = make_term(db)
+    client.post("/api/v1/calls", headers=agent_headers, json={"vogent_call_id": "vg_float_ids"})
+
+    resp = client.patch(
+        "/api/v1/calls/vg_float_ids",
+        headers=agent_headers,
+        json={"matched_term_id": f"{term.id}.000000"},
+    )
+    assert resp.status_code == 200
+
+    from app.models import Call
+
+    call = Call.query.filter_by(vogent_call_id="vg_float_ids").first()
+    assert call.matched_term_id == term.id
+
+
 def test_patch_call_also_reachable_via_post(client, agent_headers):
     """Vogent's function-calling always POSTs, never sends PATCH."""
     client.post("/api/v1/calls", headers=agent_headers, json={"vogent_call_id": "vg_post_patch"})

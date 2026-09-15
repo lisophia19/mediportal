@@ -17,7 +17,7 @@ from sqlalchemy.orm import joinedload
 from ..auth_utils import require_agent_key
 from ..extensions import db
 from ..format_utils import format_doctor_name, parse_iso_date
-from ..vogent_utils import get_agent_json
+from ..vogent_utils import coerce_int, get_agent_json
 from ..models import (
     Call,
     DirectoryEntry,
@@ -342,7 +342,7 @@ def _no_eligible_doctor_response(reason, term, caller_coords):
 @require_agent_key
 def find_doctors():
     payload = get_agent_json()
-    term_id = payload.get("term_id")
+    term_id = coerce_int(payload.get("term_id"))
     dob_raw = payload.get("date_of_birth")
     zip_value = payload.get("zip")
     call_id = payload.get("call_id")

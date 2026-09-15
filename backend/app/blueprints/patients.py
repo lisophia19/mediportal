@@ -3,7 +3,7 @@ from flask import Blueprint, jsonify
 from rapidfuzz import fuzz
 
 from ..auth_utils import require_agent_key
-from ..vogent_utils import get_agent_json
+from ..vogent_utils import coerce_int, get_agent_json
 from ..extensions import db
 from ..format_utils import parse_iso_date, serialize_patient
 from ..models import Call, Patient
@@ -41,7 +41,7 @@ def lookup_patient():
     # step c) -- excludes the rejected candidate(s) so the next layer runs
     # against the remaining pool. Not itself named in the spec's JSON, but
     # required to implement the described "re-calls excluded" behavior.
-    excluded_ids = set(payload.get("excluded_patient_ids") or [])
+    excluded_ids = {coerce_int(x) for x in (payload.get("excluded_patient_ids") or [])}
 
     if not last_name or not dob_raw:
         return jsonify({"error": "last_name and date_of_birth are required"}), 400
@@ -108,7 +108,7 @@ def confirm_patient():
     downstream nodes, rather than each needing a different field reference
     for "the patient" depending on which path the call took."""
     payload = get_agent_json()
-    patient_id = payload.get("patient_id") or payload.get("candidate_patient_id")
+    patient_id = coerce_int(payload.get("patient_id")) or coerce_int(payload.get("candidate_patient_id"))
     patient = db.session.get(Patient, patient_id) if patient_id else None
     if patient is None:
         return jsonify({"status": "not_found"})

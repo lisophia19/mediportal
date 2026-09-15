@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from flask import Blueprint, jsonify
 
 from ..auth_utils import require_agent_key
-from ..vogent_utils import get_agent_json
+from ..vogent_utils import coerce_int, get_agent_json
 from ..extensions import db
 from ..models import Call
 
@@ -59,13 +59,13 @@ def update_call(vogent_call_id):
 
     body = get_agent_json()
     if "matched_term_id" in body:
-        call.matched_term_id = body["matched_term_id"]
+        call.matched_term_id = coerce_int(body["matched_term_id"])
     if "raw_complaint" in body:
         call.raw_complaint = body["raw_complaint"]
     if "patient_id" in body:
-        call.patient_id = body["patient_id"]
+        call.patient_id = coerce_int(body["patient_id"])
     if "appointment_id" in body:
-        call.appointment_id = body["appointment_id"]
+        call.appointment_id = coerce_int(body["appointment_id"])
     if "status" in body:
         call.status = body["status"]
 

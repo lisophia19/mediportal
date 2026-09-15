@@ -7,7 +7,7 @@ from datetime import date, timedelta
 from flask import Blueprint, current_app, jsonify, request
 
 from ..auth_utils import require_agent_key
-from ..vogent_utils import get_agent_json
+from ..vogent_utils import coerce_int, get_agent_json
 from ..format_utils import slot_to_dict
 from ..providers.scheduling import DEFAULT_SLOT_LIMIT, NORMAL_WINDOW_DAYS
 
@@ -24,20 +24,22 @@ def get_availability():
     # GET, JSON body fields for Vogent's POST. Same params either way.
     body = get_agent_json()
 
-    def _param(name, cast=None):
-        value = request.args.get(name, type=cast) if request.method == "GET" else body.get(name)
-        if cast is not None and value is not None and request.method != "GET":
-            value = cast(value)
-        return value
+    def _param(name, coerce=None):
+        if request.method == "GET":
+            return request.args.get(name, type=coerce)
+        value = body.get(name)
+        # coerce_int tolerates Vogent's "60.000000" float-formatted integer
+        # outputs, which a plain int(...) cast would raise on.
+        return coerce(value) if coerce is not None and value is not None else value
 
-    doctor_id = _param("doctor_id", int)
+    doctor_id = _param("doctor_id", coerce_int)
     if not doctor_id:
         return jsonify({"error": "doctor_id is required"}), 400
 
-    practice_id = _param("practice_id", int)
+    practice_id = _param("practice_id", coerce_int)
     appointment_type = _param("appointment_type")
     urgency = _param("urgency")
-    limit = _param("limit", int) or DEFAULT_SLOT_LIMIT
+    limit = _param("limit", coerce_int) or DEFAULT_SLOT_LIMIT
 
     today = date.today()
     is_urgent = urgency == "URGENT"
