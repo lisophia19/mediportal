@@ -6,6 +6,9 @@ python-dotenv==1.0.1
 openpyxl==3.1.5
 PyJWT==2.9.0
 anthropic==0.34.2
+# httpx>=0.28 dropped the `proxies` kwarg anthropic==0.34.2 still passes
+# internally -- pin below that until the anthropic SDK is upgraded.
+httpx==0.27.2
 rapidfuzz==3.9.7
 pytest==8.3.3
 gunicorn==23.0.0
