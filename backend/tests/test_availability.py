@@ -2,7 +2,9 @@
 # auth gating.
 from datetime import datetime, timedelta, timezone
 
-from .factories import make_doctor, make_practice, make_slot
+from app.models import Call
+
+from .factories import make_doctor, make_practice, make_slot, make_term
 
 
 def test_requires_agent_key(client):
@@ -77,3 +79,29 @@ def test_urgent_window_widens_when_unmet(client, db, agent_headers):
     assert body["status"] == "slots_available"
     assert body["urgent_window_met"] is False
     assert len(body["slots"]) == 1
+
+
+def test_falls_back_to_call_term_appointment_type_for_slot_sizing(client, db, agent_headers):
+    """Regression test for a real production booking failure: this route
+    offered a single 20-min slot as sufficient (appointment_type was never
+    passed explicitly), but book_slot independently derives the appointment
+    type from the term recorded on the call and required 2 contiguous slots
+    for "urgent" -- the caller was offered a slot that then failed as
+    "taken" at booking time, when the real issue was never enough
+    contiguous capacity in the first place. This route must agree with
+    book_slot up front by resolving the same term via call_id."""
+    doctor = make_doctor(db)
+    practice = make_practice(db)
+    term = make_term(db, default_appointment_type="urgent")  # needs 2 contiguous 20-min slots
+    db.add(Call(vogent_call_id="vg_sizing", matched_term_id=term.id))
+    db.commit()
+
+    # Only a single, non-contiguous slot exists -- not enough for "urgent".
+    make_slot(doctor, practice, db, start_time=datetime.now(timezone.utc) + timedelta(hours=1))
+
+    resp = client.get(
+        f"/api/v1/availability?doctor_id={doctor.id}&call_id=vg_sizing", headers=agent_headers
+    )
+    body = resp.get_json()
+
+    assert body["status"] == "no_slots"

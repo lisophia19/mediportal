@@ -8,7 +8,9 @@ from flask import Blueprint, current_app, jsonify, request
 
 from ..auth_utils import require_agent_key
 from ..vogent_utils import coerce_int, get_agent_json
+from ..extensions import db
 from ..format_utils import slot_to_dict
+from ..models import Call, Term
 from ..providers.scheduling import DEFAULT_SLOT_LIMIT, NORMAL_WINDOW_DAYS
 
 availability_bp = Blueprint("availability", __name__, url_prefix="/api/v1")
@@ -39,7 +41,23 @@ def get_availability():
     practice_id = _param("practice_id", coerce_int)
     appointment_type = _param("appointment_type")
     urgency = _param("urgency")
+    call_id = _param("call_id")
     limit = _param("limit", coerce_int) or DEFAULT_SLOT_LIMIT
+
+    # Falls back to the appointment type of whichever term update_call
+    # already recorded on this call when the flow doesn't pass it
+    # explicitly. This matters beyond just labeling: book_slot (§5.5a)
+    # always derives the *same* term's appointment type server-side to
+    # decide how many contiguous grid slots a booking needs (e.g. "urgent"
+    # needs 2) -- if this route silently defaulted to a 1-slot assumption
+    # instead of agreeing with book_slot up front, a slot offered here as
+    # sufficient could then fail as "taken" at booking time even though it
+    # was never touched by anyone else in between.
+    if not appointment_type and call_id:
+        call = Call.query.filter_by(vogent_call_id=call_id).first()
+        if call and call.matched_term_id:
+            term = db.session.get(Term, call.matched_term_id)
+            appointment_type = term.default_appointment_type if term else None
 
     today = date.today()
     is_urgent = urgency == "URGENT"
