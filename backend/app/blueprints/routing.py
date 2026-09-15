@@ -452,5 +452,9 @@ def find_doctors():
             "best_doctor_id": top["doctor_id"],
             "best_practice_id": top["practice"]["id"],
             "best_doctor_spoken_label": top["spoken_label"],
+            # Short form ("Dr. Michael Fracchia") for every mention after the
+            # first -- the flow only needs the full spoken_label once, when
+            # the doctor is first introduced.
+            "best_doctor_name": top["name"],
         }
     )

@@ -203,12 +203,12 @@ nodes = [
         "init_call", "init-call", "create_call",
         inputs={"caller_phone": "{{toNumber}}"},
         outputs=[out("call_id", "INTEGER", "internal call id")],
-        started_message="Thanks for calling -- I can help get you scheduled today.",
-        transitions=[always("ask_first_name")],
+        started_message="Thanks for calling!",
+        transitions=[always("ask_complaint")],
     ),
     question_node(
         "ask_first_name", "ask-first-name",
-        "Could I get your first name?",
+        "Great, let's get you booked in. Could I get your first name?",
         transitions=[always("ask_last_name")],
     ),
     question_node(
@@ -308,11 +308,30 @@ nodes = [
         "ask_zip", "ask-zip",
         "What's your ZIP code, or the town you're in?",
         answer_guidelines="If the caller gives a 5-digit ZIP code, respond with just those 5 digits. Otherwise respond with the town or city name they gave.",
-        transitions=[always("ask_complaint")],
+        transitions=[always("confirm_details")],
+    ),
+    question_node(
+        "confirm_details", "confirm-details",
+        (
+            "Before continuing, read back what you have collected so far to make sure "
+            "it is all correct: name {{node.ask_first_name.answer}} "
+            "{{node.ask_last_name.answer}}, date of birth {{node.ask_dob.answer}}, "
+            "location {{node.ask_zip.answer}}, and the reason for the visit "
+            "{{node.ask_complaint.answer}}. Ask the caller to confirm all of that is "
+            "right."
+        ),
+        answer_guidelines=(
+            "If the caller confirms everything is correct, respond with exactly YES. "
+            "If they say anything is wrong, respond with exactly NO."
+        ),
+        transitions=[
+            equal("confirm_details", "answer", "YES", "find_doctors_fn"),
+            always("ask_first_name"),
+        ],
     ),
     question_node(
         "ask_complaint", "ask-complaint",
-        "What's going on that brings you in today?",
+        "Welcome to Long Island Bone and Joint -- what can we help you with today?",
         answer_guidelines="Capture what the caller says about their issue as close to verbatim as possible -- do not paraphrase or summarize.",
         transitions=[always("match_issue_fn")],
     ),
@@ -325,6 +344,10 @@ nodes = [
             out("confirm_prompt", "STRING", nullable=True),
             out("clarify_prompt", "STRING", nullable=True),
             out("spoken_response", "STRING", nullable=True),
+            out("alternate_1_id", "INTEGER", nullable=True),
+            out("alternate_1_label", "STRING", nullable=True),
+            out("alternate_2_id", "INTEGER", nullable=True),
+            out("alternate_2_label", "STRING", nullable=True),
         ],
         transitions=[
             equal("match_issue_fn", "status", "matched", "confirm_complaint"),
@@ -339,8 +362,47 @@ nodes = [
         answer_guidelines="If the caller confirms (yes, correct, etc.) respond with exactly YES. Otherwise respond with exactly NO.",
         transitions=[
             equal("confirm_complaint", "answer", "YES", "save_term_matched"),
+            always("offer_alternates"),
+        ],
+    ),
+    question_node(
+        "offer_alternates", "offer-alternates",
+        (
+            "The caller said that wasn't right. Apologize briefly, then ask if it could "
+            "instead be {{node.match_issue_fn.alternate_1_label}}, or "
+            "{{node.match_issue_fn.alternate_2_label}}. If neither of those were "
+            "mentioned (they came back empty), skip straight to: 'Okay, can you tell me "
+            "a bit more about what's going on?'"
+        ),
+        answer_guidelines=(
+            "If the caller agrees it is the FIRST option you offered, respond with "
+            "exactly ALT1. If they agree it is the SECOND option, respond with exactly "
+            "ALT2. If they describe their issue differently, say neither fits, or no "
+            "options were offered, respond with exactly OTHER."
+        ),
+        transitions=[
+            equal("offer_alternates", "answer", "ALT1", "save_term_alternate_1"),
+            equal("offer_alternates", "answer", "ALT2", "save_term_alternate_2"),
             always("ask_complaint"),
         ],
+    ),
+    function_node(
+        "save_term_alternate_1", "save-term-alternate-1", "update_call",
+        inputs={
+            "matched_term_id": "{{node.match_issue_fn.alternate_1_id}}",
+            "raw_complaint": "{{node.ask_complaint.answer}}",
+        },
+        outputs=[out("status", "STRING")],
+        transitions=[always("ask_first_name")],
+    ),
+    function_node(
+        "save_term_alternate_2", "save-term-alternate-2", "update_call",
+        inputs={
+            "matched_term_id": "{{node.match_issue_fn.alternate_2_id}}",
+            "raw_complaint": "{{node.ask_complaint.answer}}",
+        },
+        outputs=[out("status", "STRING")],
+        transitions=[always("ask_first_name")],
     ),
     question_node(
         "ask_clarify", "ask-clarify",
@@ -378,7 +440,7 @@ nodes = [
             "raw_complaint": "{{node.ask_complaint.answer}}",
         },
         outputs=[out("status", "STRING")],
-        transitions=[always("find_doctors_fn")],
+        transitions=[always("ask_first_name")],
     ),
     function_node(
         "save_term_clarified", "save-term-clarified", "update_call",
@@ -387,7 +449,7 @@ nodes = [
             "raw_complaint": "{{node.ask_complaint.answer}}",
         },
         outputs=[out("status", "STRING")],
-        transitions=[always("find_doctors_fn")],
+        transitions=[always("ask_first_name")],
     ),
     function_node(
         "find_doctors_fn", "find-doctors-fn", "find_doctors",
@@ -402,6 +464,7 @@ nodes = [
             out("best_doctor_id", "INTEGER", nullable=True),
             out("best_practice_id", "INTEGER", nullable=True),
             out("best_doctor_spoken_label", "STRING", nullable=True),
+            out("best_doctor_name", "STRING", nullable=True),
             out("spoken_response", "STRING", nullable=True),
         ],
         transitions=[
@@ -433,7 +496,8 @@ nodes = [
         "present_slots", "present-slots",
         (
             "Let the caller know you found some openings with "
-            "{{node.find_doctors_fn.best_doctor_spoken_label}}. If "
+            "{{node.find_doctors_fn.best_doctor_name}} -- just the name, you already "
+            "gave their specialty and office a moment ago, do not repeat it. If "
             "{{node.check_availability_fn.urgent_window_met}} is false, first let the "
             "caller know honestly that you could not find anything within the next "
             "few days for this urgent issue, but here is the soonest opening you do "
@@ -442,16 +506,37 @@ nodes = [
             "verbatim: {{node.check_availability_fn.slots}}"
         ),
         answer_guidelines=(
-            "If the caller picks one of the listed times, respond with the exact "
-            "slot_id integer of that slot, copied from the list above -- never a "
-            "time string, only the integer id. If the caller has no preference, "
-            "respond with the slot_id of the soonest slot. If the caller does not "
-            "want any of the times offered, respond with exactly NONE."
+            "If the caller CLEARLY picks one of the listed times with no question or "
+            "hesitation attached, respond with the exact slot_id integer of that slot, "
+            "copied from the list above -- never a time string, only the integer id. "
+            "If the caller has no preference at all, respond with the slot_id of the "
+            "soonest slot. If the caller does not want any of the times offered, "
+            "respond with exactly NONE. If the caller asks a question, raises a "
+            "concern or doubt (e.g. about the doctor, the practice, or whether this is "
+            "the right fit), or otherwise mixes a time preference with something "
+            "unresolved rather than a clean confirmation, respond with exactly "
+            "CONTINUE -- never book on an unclear or mixed answer."
         ),
         transitions=[
             equal("present_slots", "answer", "NONE", "dead_end_no_slots"),
+            equal("present_slots", "answer", "CONTINUE", "address_concern"),
             always("book_appointment_fn"),
         ],
+    ),
+    question_node(
+        "address_concern", "address-concern",
+        (
+            "The caller asked a question or raised a concern instead of clearly "
+            "confirming a time -- do NOT book anything yet. Address whatever they "
+            "asked as best you can using only what you already know from this call "
+            "(e.g. if they are unsure about the doctor's fit, reassure them briefly "
+            "that {{node.find_doctors_fn.best_doctor_name}}'s office does see "
+            "patients for this type of issue according to our scheduling records -- "
+            "never invent clinical detail you were not given). Then ask again which "
+            "of the times already mentioned works, or if they would like something "
+            "else."
+        ),
+        transitions=[always("present_slots")],
     ),
     function_node(
         "book_appointment_fn", "book-appointment-fn", "book_appointment",
@@ -531,11 +616,13 @@ def build_and_publish():
     }
 
     payload = {
-        # Reused from the agent's existing (template) versioned prompt --
-        # same model already available/valid on this account.
-        "aiModelId": os.environ.get("VOGENT_AI_MODEL_ID", "c6c18d01-28ea-45f0-8a89-8154f7e00ad4"),
+        # GPT-5.5 Flow -- a GPT-based model on this account purpose-built
+        # for Flow Builder agents (name pattern matches Vogent's own
+        # flow-oriented models, e.g. "Vogent Survey v4"). See `GET /models`
+        # for the full list available on this account.
+        "aiModelId": os.environ.get("VOGENT_AI_MODEL_ID", "27390747-6ebb-4d4a-af57-0ebf52f3324e"),
         "agentType": "CUSTOM_FLOW",
-        "name": "mediportal-flow-v1",
+        "name": "mediportal-flow-v2",
         "prompt": None,
         "flowDefinition": flow_definition,
     }

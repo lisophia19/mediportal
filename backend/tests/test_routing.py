@@ -303,6 +303,7 @@ def test_find_doctors_matched_ranks_by_distance(client, db, agent_headers):
     assert body["best_doctor_id"] == doc_near.id
     assert body["best_practice_id"] == near.id
     assert body["best_doctor_spoken_label"] == body["doctors"][0]["spoken_label"]
+    assert body["best_doctor_name"] == body["doctors"][0]["name"]
 
 
 def test_find_doctors_falls_back_to_term_id_recorded_on_call(client, db, agent_headers):
