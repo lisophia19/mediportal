@@ -2,9 +2,10 @@
 # SchedulingProvider.book_slot -- builds the full confirmation payload here
 # (the provider's BookingResult only carries IDs) by joining
 # doctors/practices/terms.
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, jsonify
 
 from ..auth_utils import require_agent_key
+from ..vogent_utils import get_agent_json
 from ..extensions import db
 from ..format_utils import format_doctor_name, format_spoken_datetime, slot_to_dict
 from ..models import Call, Doctor, Practice, Term
@@ -22,7 +23,7 @@ APPOINTMENT_TYPE_LABELS = {
 @appointments_bp.post("")
 @require_agent_key
 def book_appointment():
-    body = request.get_json(force=True) or {}
+    body = get_agent_json()
     slot_id = body.get("slot_id")
     patient_id = body.get("patient_id")
     term_id = body.get("term_id")

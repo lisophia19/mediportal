@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from flask import Blueprint, current_app, jsonify, request
 
 from ..auth_utils import require_agent_key
+from ..vogent_utils import get_agent_json
 from ..format_utils import slot_to_dict
 from ..providers.scheduling import DEFAULT_SLOT_LIMIT, NORMAL_WINDOW_DAYS
 
@@ -15,24 +16,35 @@ availability_bp = Blueprint("availability", __name__, url_prefix="/api/v1")
 URGENT_WINDOW_DAYS = 3
 
 
-@availability_bp.get("/availability")
+@availability_bp.route("/availability", methods=["GET", "POST"])
 @require_agent_key
 def get_availability():
-    doctor_id = request.args.get("doctor_id", type=int)
+    # Vogent's function-calling always POSTs a JSON body (no query strings),
+    # so this reads whichever the caller used -- query params for a normal
+    # GET, JSON body fields for Vogent's POST. Same params either way.
+    body = get_agent_json()
+
+    def _param(name, cast=None):
+        value = request.args.get(name, type=cast) if request.method == "GET" else body.get(name)
+        if cast is not None and value is not None and request.method != "GET":
+            value = cast(value)
+        return value
+
+    doctor_id = _param("doctor_id", int)
     if not doctor_id:
         return jsonify({"error": "doctor_id is required"}), 400
 
-    practice_id = request.args.get("practice_id", type=int)
-    appointment_type = request.args.get("appointment_type")
-    urgency = request.args.get("urgency")
-    limit = request.args.get("limit", default=DEFAULT_SLOT_LIMIT, type=int)
+    practice_id = _param("practice_id", int)
+    appointment_type = _param("appointment_type")
+    urgency = _param("urgency")
+    limit = _param("limit", int) or DEFAULT_SLOT_LIMIT
 
     today = date.today()
     is_urgent = urgency == "URGENT"
     window_days = URGENT_WINDOW_DAYS if is_urgent else NORMAL_WINDOW_DAYS
 
-    date_from_param = request.args.get("from")
-    date_to_param = request.args.get("to")
+    date_from_param = _param("from")
+    date_to_param = _param("to")
     date_from = date.fromisoformat(date_from_param) if date_from_param else today
     date_to = date.fromisoformat(date_to_param) if date_to_param else today + timedelta(days=window_days)
 

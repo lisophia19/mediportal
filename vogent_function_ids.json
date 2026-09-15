@@ -1,0 +1,11 @@
+{
+  "create_call": "1e0085a3-8496-4955-aa1d-3a97c3706b5c",
+  "lookup_patient": "65d55614-d3a8-447b-bbe7-27c047c5e6ba",
+  "create_patient": "0251b321-671e-4c54-b63f-3d1f74b3b4cd",
+  "match_issue": "f2b2d043-05d0-4ff5-8d55-5cfb5ed28f7e",
+  "find_doctors": "0b3072de-faef-4658-97dc-8bb5b4c39a1a",
+  "get_availability": "65d19a50-ccb6-46e5-b6fc-373b4662c7ed",
+  "book_appointment": "4c13e8a4-48c4-49ee-89d4-65e714f97c1a",
+  "update_call": "6cf28e44-9246-4b09-aa32-aef65ff4a083",
+  "complete_call": "46f2414d-4c6f-4255-858d-6860779e1df1"
+}

@@ -17,8 +17,8 @@ from sqlalchemy.orm import joinedload
 from ..auth_utils import require_agent_key
 from ..extensions import db
 from ..format_utils import format_doctor_name, parse_iso_date
+from ..vogent_utils import get_agent_json
 from ..models import (
-    Call,
     DirectoryEntry,
     DirectoryRedirectRule,
     Doctor,
@@ -139,7 +139,7 @@ NO_MATCH_RESPONSE = (
 @routing_bp.post("/match-issue")
 @require_agent_key
 def match_issue():
-    payload = request.get_json(silent=True) or {}
+    payload = get_agent_json()
     complaint_text = (payload.get("complaint_text") or "").strip()
     call_id = payload.get("call_id")
     if not complaint_text or not call_id:
@@ -320,7 +320,7 @@ def _no_eligible_doctor_response(reason, term, caller_coords):
 @routing_bp.post("/find-doctors")
 @require_agent_key
 def find_doctors():
-    payload = request.get_json(silent=True) or {}
+    payload = get_agent_json()
     term_id = payload.get("term_id")
     dob_raw = payload.get("date_of_birth")
     zip_value = payload.get("zip")

@@ -17,6 +17,23 @@ def test_no_slots(client, db, agent_headers):
     assert resp.get_json()["status"] == "no_slots"
 
 
+def test_post_body_works_same_as_get_query_params(client, db, agent_headers):
+    """Vogent's function-calling always POSTs a JSON body, never query
+    params -- this endpoint must accept both the same way."""
+    doctor = make_doctor(db)
+    practice = make_practice(db)
+    make_slot(doctor, practice, db, start_time=datetime.now(timezone.utc) + timedelta(days=1))
+
+    resp = client.post(
+        "/api/v1/availability", headers=agent_headers, json={"doctor_id": doctor.id}
+    )
+    body = resp.get_json()
+
+    assert resp.status_code == 200
+    assert body["status"] == "slots_available"
+    assert len(body["slots"]) == 1
+
+
 def test_normal_window_returns_slots_without_urgent_flag(client, db, agent_headers):
     doctor = make_doctor(db)
     practice = make_practice(db)

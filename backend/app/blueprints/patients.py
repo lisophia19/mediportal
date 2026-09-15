@@ -1,8 +1,9 @@
 # Spec §5.3 (POST /patients/lookup) and §5.4 (POST /patients).
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify
 from rapidfuzz import fuzz
 
 from ..auth_utils import require_agent_key
+from ..vogent_utils import get_agent_json
 from ..extensions import db
 from ..format_utils import parse_iso_date, serialize_patient
 from ..models import Call, Patient
@@ -31,7 +32,7 @@ def _confirm_prompt(candidate):
 @patients_bp.post("/lookup")
 @require_agent_key
 def lookup_patient():
-    payload = request.get_json(silent=True) or {}
+    payload = get_agent_json()
     last_name = (payload.get("last_name") or "").strip()
     dob_raw = payload.get("date_of_birth")
     first_name = (payload.get("first_name") or "").strip()
@@ -100,7 +101,7 @@ def lookup_patient():
 @patients_bp.post("")
 @require_agent_key
 def create_patient():
-    payload = request.get_json(silent=True) or {}
+    payload = get_agent_json()
     first_name = (payload.get("first_name") or "").strip()
     last_name = (payload.get("last_name") or "").strip()
     dob_raw = payload.get("date_of_birth")
