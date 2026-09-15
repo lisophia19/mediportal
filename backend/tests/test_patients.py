@@ -175,6 +175,24 @@ def test_create_patient_requires_minimum_fields(client, db, agent_headers):
     assert resp.status_code == 400
 
 
+def test_confirm_patient_resolves_candidate_id_to_found_shape(client, db, agent_headers):
+    patient = _make_patient(db)
+    resp = client.post(
+        "/api/v1/patients/confirm", headers=agent_headers, json={"patient_id": patient.id}
+    )
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert body["status"] == "found"
+    assert body["patient"]["id"] == patient.id
+
+
+def test_confirm_patient_unknown_id_returns_not_found(client, agent_headers):
+    resp = client.post(
+        "/api/v1/patients/confirm", headers=agent_headers, json={"patient_id": 999999}
+    )
+    assert resp.get_json()["status"] == "not_found"
+
+
 def test_lookup_requires_agent_key(client, db):
     resp = client.post(
         "/api/v1/patients/lookup",

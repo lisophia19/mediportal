@@ -98,6 +98,23 @@ def lookup_patient():
     )
 
 
+@patients_bp.post("/confirm")
+@require_agent_key
+def confirm_patient():
+    """Resolves a candidate_patient_id from a §5.3 'confirm' response into
+    the same {status: found, patient: {...}} shape lookup_patient returns
+    directly -- exists so the Vogent flow's confirm-by-readback branch and
+    its direct-match branch converge on one consistent response shape for
+    downstream nodes, rather than each needing a different field reference
+    for "the patient" depending on which path the call took."""
+    payload = get_agent_json()
+    patient_id = payload.get("patient_id") or payload.get("candidate_patient_id")
+    patient = db.session.get(Patient, patient_id) if patient_id else None
+    if patient is None:
+        return jsonify({"status": "not_found"})
+    return jsonify({"status": "found", "patient": serialize_patient(patient)})
+
+
 @patients_bp.post("")
 @require_agent_key
 def create_patient():

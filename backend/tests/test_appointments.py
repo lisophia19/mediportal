@@ -65,3 +65,29 @@ def test_book_appointment_slot_taken_returns_409_with_alternates(client, db, age
 def test_book_appointment_missing_fields_400(client, agent_headers):
     resp = client.post("/api/v1/appointments", headers=agent_headers, json={})
     assert resp.status_code == 400
+
+
+def test_book_appointment_falls_back_to_patient_and_term_recorded_on_call(
+    client, db, agent_headers
+):
+    """The flow may reach booking without explicitly passing patient_id/
+    term_id (e.g. after a confirm-by-readback path) -- falls back to
+    whatever update_call already recorded on the call record."""
+    from app.models import Call
+
+    doctor = make_doctor(db)
+    practice = make_practice(db)
+    term = make_term(db, default_appointment_type="follow_up")
+    patient = make_patient(db)
+    slot = make_slot(doctor, practice, db)
+    db.add(Call(vogent_call_id="vg_fallback_book", patient_id=patient.id, matched_term_id=term.id))
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/appointments",
+        headers=agent_headers,
+        json={"slot_id": slot.id, "call_id": "vg_fallback_book"},
+    )
+    body = resp.get_json()
+    assert resp.status_code == 201
+    assert body["status"] == "scheduled"

@@ -29,13 +29,20 @@ def book_appointment():
     term_id = body.get("term_id")
     vogent_call_id = body.get("call_id")
 
+    call = Call.query.filter_by(vogent_call_id=vogent_call_id).first() if vogent_call_id else None
+    internal_call_id = call.id if call else None
+
+    # Falls back to whichever patient/term update_call already recorded on
+    # this call when the flow doesn't pass them explicitly -- same reasoning
+    # as find_doctors' term_id fallback: the call record is the one place
+    # every upstream conversational path agrees on.
+    if not patient_id and call:
+        patient_id = call.patient_id
+    if not term_id and call:
+        term_id = call.matched_term_id
+
     if not slot_id or not patient_id or not term_id:
         return jsonify({"error": "slot_id, patient_id, and term_id are required"}), 400
-
-    internal_call_id = None
-    if vogent_call_id:
-        call = Call.query.filter_by(vogent_call_id=vogent_call_id).first()
-        internal_call_id = call.id if call else None
 
     provider = current_app.extensions["scheduling_provider"]
     try:

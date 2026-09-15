@@ -10,7 +10,7 @@ import os
 from datetime import date
 
 from anthropic import Anthropic
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, jsonify
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
@@ -19,6 +19,7 @@ from ..extensions import db
 from ..format_utils import format_doctor_name, parse_iso_date
 from ..vogent_utils import get_agent_json
 from ..models import (
+    Call,
     DirectoryEntry,
     DirectoryRedirectRule,
     Doctor,
@@ -325,6 +326,17 @@ def find_doctors():
     dob_raw = payload.get("date_of_birth")
     zip_value = payload.get("zip")
     call_id = payload.get("call_id")
+
+    # Falls back to the term match-issue already recorded on the call (via
+    # update_call) when the flow doesn't pass term_id explicitly -- Vogent's
+    # flow graph can reach this node from more than one upstream path (a
+    # direct match vs. one that needed a clarifying round), and the call
+    # record is the one place both paths agree on, rather than each flow
+    # node needing to know which upstream node's output to reference.
+    if not term_id and call_id:
+        call = Call.query.filter_by(vogent_call_id=call_id).first()
+        term_id = call.matched_term_id if call else None
+
     if not term_id or not dob_raw or not call_id:
         return jsonify({"error": "term_id, date_of_birth, and call_id are required"}), 400
 

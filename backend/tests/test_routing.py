@@ -10,6 +10,7 @@ import pytest
 
 from app.blueprints import routing as routing_module
 from app.models import (
+    Call,
     Doctor,
     DoctorPractice,
     DirectoryEntry,
@@ -192,6 +193,28 @@ def test_find_doctors_matched_ranks_by_distance(client, db, agent_headers):
     assert body["status"] == "matched"
     assert body["doctors"][0]["doctor_id"] == doc_near.id
     assert body["doctors"][0]["distance_miles"] < body["doctors"][1]["distance_miles"]
+
+
+def test_find_doctors_falls_back_to_term_id_recorded_on_call(client, db, agent_headers):
+    """The flow can reach find-doctors from more than one upstream path (a
+    direct match vs. one that needed a clarifying round) -- when it doesn't
+    pass term_id explicitly, this falls back to whatever update_call already
+    recorded on the call record."""
+    term = _make_term(db)
+    practice = _make_practice(db, "Merrick", "11566", lat=40.6668, lon=-73.5502)
+    doctor = _make_doctor(db, "Alice", "Chen", "Hand & Wrist", practice)
+    db.add(TermEligibility(term_id=term.id, doctor_id=doctor.id, min_age=1, max_age=100))
+    db.add(Call(vogent_call_id="vg_fallback", matched_term_id=term.id))
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/routing/find-doctors",
+        json={"date_of_birth": "1991-04-02", "zip": "11563", "call_id": "vg_fallback"},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched"
+    assert body["doctors"][0]["doctor_id"] == doctor.id
 
 
 def test_find_doctors_age_restricted(client, db, agent_headers):
