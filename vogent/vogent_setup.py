@@ -7,11 +7,15 @@
 # function's apiPath) once one exists.
 import json
 import os
+from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
 
-load_dotenv()
+REPO_ROOT = Path(__file__).resolve().parent.parent
+FUNCTION_IDS_PATH = Path(__file__).resolve().parent / "vogent_function_ids.json"
+
+load_dotenv(REPO_ROOT / ".env")
 
 VOGENT_API = "https://api.vogent.ai/api"
 AGENT_ID = os.environ["VOGENT_AGENT_ID"]
@@ -164,6 +168,20 @@ FUNCTIONS = [
             ["vogent_call_id"],
         ),
     ),
+    (
+        "resolve_triage",
+        "Resolve a hip-vs-spine screening answer to one of the two candidate terms (spec §5.1 needs_triage).",
+        "/routing/resolve-triage",
+        _schema(
+            {
+                "triage_answer": {"type": "string", "description": "Caller's answer to the screening question"},
+                "hip_term_id": {"type": "integer"},
+                "spine_term_id": {"type": "integer"},
+                "call_id": {"type": "string"},
+            },
+            ["triage_answer", "hip_term_id", "spine_term_id"],
+        ),
+    ),
 ]
 
 
@@ -191,6 +209,6 @@ def create_functions():
 
 if __name__ == "__main__":
     function_ids = create_functions()
-    with open("vogent_function_ids.json", "w") as f:
+    with open(FUNCTION_IDS_PATH, "w") as f:
         json.dump(function_ids, f, indent=2)
-    print("\nWrote vogent_function_ids.json")
+    print(f"\nWrote {FUNCTION_IDS_PATH}")

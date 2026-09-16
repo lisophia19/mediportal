@@ -14,18 +14,21 @@
 #    this first pass.
 import json
 import os
+from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
 
-load_dotenv()
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+load_dotenv(REPO_ROOT / ".env")
 
 VOGENT_API = "https://api.vogent.ai/api"
 AGENT_ID = os.environ["VOGENT_AGENT_ID"]
 API_KEY = os.environ["VOGENT_API_KEY"]
 HEADERS = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
 
-FN = json.load(open("vogent_function_ids.json"))
+FN = json.load(open(Path(__file__).resolve().parent / "vogent_function_ids.json"))
 
 
 def always(target):
@@ -348,9 +351,15 @@ nodes = [
             out("alternate_1_label", "STRING", nullable=True),
             out("alternate_2_id", "INTEGER", nullable=True),
             out("alternate_2_label", "STRING", nullable=True),
+            out("triage_question", "STRING", nullable=True),
+            out("hip_term_id", "INTEGER", nullable=True),
+            out("hip_label", "STRING", nullable=True),
+            out("spine_term_id", "INTEGER", nullable=True),
+            out("spine_label", "STRING", nullable=True),
         ],
         transitions=[
             equal("match_issue_fn", "status", "matched", "confirm_complaint"),
+            equal("match_issue_fn", "status", "needs_triage", "ask_triage_question"),
             equal("match_issue_fn", "status", "needs_clarification", "ask_clarify"),
             equal("match_issue_fn", "status", "no_match", "dead_end_no_match_direct"),
             always("dead_end_system_error"),
@@ -399,6 +408,88 @@ nodes = [
         "save_term_alternate_2", "save-term-alternate-2", "update_call",
         inputs={
             "matched_term_id": "{{node.match_issue_fn.alternate_2_id}}",
+            "raw_complaint": "{{node.ask_complaint.answer}}",
+        },
+        outputs=[out("status", "STRING")],
+        transitions=[always("ask_first_name")],
+    ),
+    # --- Hip-vs-spine triage (spec §5.1 needs_triage) -----------------------
+    # A dedicated screening question for this one specific ambiguity, rather
+    # than the generic "is it more like X or Y" clarify_prompt -- see
+    # match_issue's needs_triage branch for why. The mapping from answer to
+    # region lives entirely in the backend (resolve_triage), never here.
+    question_node(
+        "ask_triage_question", "ask-triage-question",
+        "{{node.match_issue_fn.triage_question}}",
+        transitions=[always("resolve_triage_fn")],
+    ),
+    function_node(
+        "resolve_triage_fn", "resolve-triage-fn", "resolve_triage",
+        inputs={
+            "triage_answer": "{{node.ask_triage_question.answer}}",
+            "hip_term_id": "{{node.match_issue_fn.hip_term_id}}",
+            "spine_term_id": "{{node.match_issue_fn.spine_term_id}}",
+        },
+        outputs=[
+            out("status", "STRING"),
+            out("term", "CUSTOM", nullable=True, custom_schema=TERM_SCHEMA),
+            out("confirm_prompt", "STRING", nullable=True),
+            out("alternate_1_id", "INTEGER", nullable=True),
+            out("alternate_1_label", "STRING", nullable=True),
+            out("spoken_response", "STRING", nullable=True),
+        ],
+        transitions=[
+            equal("resolve_triage_fn", "status", "matched", "confirm_triage"),
+            equal("resolve_triage_fn", "status", "still_unclear", "ask_triage_preference"),
+            always("dead_end_system_error"),
+        ],
+    ),
+    question_node(
+        "confirm_triage", "confirm-triage",
+        "{{node.resolve_triage_fn.confirm_prompt}}",
+        answer_guidelines="If the caller confirms (yes, correct, etc.) respond with exactly YES. Otherwise respond with exactly NO.",
+        transitions=[
+            equal("confirm_triage", "answer", "YES", "save_term_triaged"),
+            always("ask_complaint"),
+        ],
+    ),
+    function_node(
+        "save_term_triaged", "save-term-triaged", "update_call",
+        inputs={
+            "matched_term_id": "{{node.resolve_triage_fn.term.id}}",
+            "raw_complaint": "{{node.ask_complaint.answer}}",
+        },
+        outputs=[out("status", "STRING")],
+        transitions=[always("ask_first_name")],
+    ),
+    # If the screening question itself came back unclear, ask the caller to
+    # just state a preference directly rather than guessing -- one more
+    # attempt, then an honest dead end rather than looping indefinitely.
+    question_node(
+        "ask_triage_preference", "ask-triage-preference",
+        "{{node.resolve_triage_fn.spoken_response}}",
+        transitions=[always("resolve_triage_retry_fn")],
+    ),
+    function_node(
+        "resolve_triage_retry_fn", "resolve-triage-retry-fn", "resolve_triage",
+        inputs={
+            "triage_answer": "{{node.ask_triage_preference.answer}}",
+            "hip_term_id": "{{node.match_issue_fn.hip_term_id}}",
+            "spine_term_id": "{{node.match_issue_fn.spine_term_id}}",
+        },
+        outputs=[
+            out("status", "STRING"),
+            out("term", "CUSTOM", nullable=True, custom_schema=TERM_SCHEMA),
+        ],
+        transitions=[
+            equal("resolve_triage_retry_fn", "status", "matched", "save_term_triaged_retry"),
+            always("dead_end_no_match_direct"),
+        ],
+    ),
+    function_node(
+        "save_term_triaged_retry", "save-term-triaged-retry", "update_call",
+        inputs={
+            "matched_term_id": "{{node.resolve_triage_retry_fn.term.id}}",
             "raw_complaint": "{{node.ask_complaint.answer}}",
         },
         outputs=[out("status", "STRING")],
