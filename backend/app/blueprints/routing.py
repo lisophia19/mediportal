@@ -1,9 +1,6 @@
-# Spec §5.1 (POST /routing/match-issue), §5.2 (POST /routing/find-doctors),
-# §5.9 (directory redirect, internal helper called from §5.2).
-#
-# Critical design constraint (spec §1/§3.2): no doctor name, specialty, or
-# body-part branch is hardcoded here. Every routing decision comes from a
-# query over terms / term_eligibility / doctor_practices / directory tables.
+# Spec §5.1 match-issue, §5.2 find-doctors, §5.9 directory redirect.
+# No doctor/specialty/body-part logic is hardcoded -- routing comes from
+# terms / term_eligibility / doctor_practices / directory tables (spec §1/§3.2).
 import json
 import math
 import os
@@ -32,14 +29,64 @@ from ..models import (
 
 routing_bp = Blueprint("routing", __name__, url_prefix="/api/v1/routing")
 
-# §5.1 confidence thresholds -- below CLARIFY it's a dead end, above MATCH
-# it's a confident single match, in between needs a disambiguating question.
+# §5.1 confidence thresholds: below CLARIFY is a dead end, above MATCH is
+# confident, in between needs a disambiguating question.
 MATCH_CONFIDENCE = 0.75
 CLARIFY_CONFIDENCE = 0.35
-MATCH_GAP = 0.15  # top candidate must clear the runner-up by this much
+MATCH_GAP = 0.15  # top candidate must clear runner-up by this much
 MAX_CANDIDATE_TERMS = 12
 
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
+
+# Screening question asked only when a complaint is ambiguous between hip
+# and spine (see match_issue) -- a front-desk heuristic, not a diagnosis.
+HIP_SPINE_TRIAGE_QUESTION = (
+    "Does the pain travel or shoot down into your leg, or does it mostly stay in one spot?"
+)
+
+# Clinical mapping lives in this prompt, not the Vogent flow -- the flow
+# only ever speaks what the backend decided.
+_TRIAGE_CLASSIFIER_PROMPT = """You are helping a phone-intake system triage an orthopedic \
+patient between a hip specialist and a spine specialist, based on their answer to one \
+screening question: "{question}"
+
+Use these patterns (this is intake triage, not a diagnosis):
+- Pain that travels, shoots, or radiates down into the leg (or arm, for neck pain) strongly \
+indicates a SPINE issue (a nerve root being irritated).
+- Pain that stays localized to one spot -- groin, buttock, thigh, hip -- with no radiation \
+suggests a HIP issue.
+- Pain triggered specifically by hip flexion motions (putting on socks/shoes, lifting a knee \
+up) strongly indicates HIP.
+- Pain that flares with coughing, sneezing, or straining strongly indicates SPINE (increased \
+pressure on an irritated nerve root).
+- Pain worse after prolonged standing/walking and relieved by sitting suggests SPINE (a \
+spinal stenosis pattern); stiffness/pain in the first few steps after sitting or waking that \
+loosens up with movement leans HIP (an osteoarthritis "warm-up" pattern), though this one \
+overlaps somewhat with spine facet issues, so weight it less than the others.
+
+Caller's answer: "{answer}"
+
+Respond with ONLY one word: HIP, SPINE, or UNCLEAR if the answer genuinely does not point \
+either way."""
+
+
+def _classify_hip_or_spine_answer(question, answer_text):
+    client = _anthropic_client()
+    response = client.messages.create(
+        model=ANTHROPIC_MODEL,
+        max_tokens=10,
+        messages=[
+            {
+                "role": "user",
+                "content": _TRIAGE_CLASSIFIER_PROMPT.format(question=question, answer=answer_text),
+            }
+        ],
+    )
+    text_block = next((block for block in response.content if block.type == "text"), None)
+    if text_block is None:
+        return "UNCLEAR"
+    verdict = _strip_markdown_fence(text_block.text).strip().upper()
+    return verdict if verdict in ("HIP", "SPINE") else "UNCLEAR"
 
 EARTH_RADIUS_MILES = 3958.8
 
@@ -80,8 +127,7 @@ def _candidate_terms(complaint_text):
     scored.sort(key=lambda pair: pair[0], reverse=True)
     if scored:
         return [term for _, term in scored[:MAX_CANDIDATE_TERMS]]
-    # No keyword overlap at all -- still give the LLM something to reason
-    # about rather than auto-declaring no_match on a pre-filter miss.
+    # No keyword overlap -- let the LLM reason instead of auto no_match.
     return terms[:MAX_CANDIDATE_TERMS]
 
 
@@ -117,10 +163,8 @@ def _classify_complaint(complaint_text, candidates):
         max_tokens=500,
         messages=[{"role": "user", "content": prompt}],
     )
-    # The model sometimes reasons in a `thinking` block before the `text`
-    # block on more complex prompts (candidate-list length seems to be the
-    # trigger) -- content[0] is not reliably the text block, so find it by
-    # type rather than assuming position.
+    # content[0] isn't reliably the text block (a thinking block can precede
+    # it) -- find it by type instead.
     text_block = next((block for block in response.content if block.type == "text"), None)
     if text_block is None:
         raise ValueError(f"no text block in Anthropic response: {response.content!r}")
@@ -128,10 +172,7 @@ def _classify_complaint(complaint_text, candidates):
 
 
 def _strip_markdown_fence(text):
-    """The model sometimes wraps its JSON answer in a ```json ... ``` fence
-    despite being told to respond with only JSON -- real production traffic
-    hit this. Strip it defensively rather than relying on the model always
-    following that instruction."""
+    """Strips an optional ```json ... ``` fence the model sometimes adds."""
     text = text.strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[1] if "\n" in text else text[3:]
@@ -193,10 +234,7 @@ def match_issue():
     gap_clears = len(matches) == 1 or (top.get("confidence", 0) - matches[1].get("confidence", 0)) >= MATCH_GAP
     if top.get("confidence", 0) >= MATCH_CONFIDENCE and gap_clears:
         confirm_prompt = f"It sounds like this is {top.get('spoken_label', top_term.term)} -- is that right?"
-        # Runner-up candidates, flattened (not a nested array) so the Vogent
-        # flow can reference them as scalar inputs if the caller says the
-        # top match is wrong (spec: offer alternatives rather than just
-        # re-asking from scratch). Nullable -- often there is no runner-up.
+        # Flattened (not nested) so Vogent can use them as scalar inputs.
         alternates = {}
         for i, match in enumerate(matches[1:3], start=1):
             term = terms_by_id.get(match.get("term_id"))
@@ -213,6 +251,34 @@ def match_issue():
                 "alternate_1_label": alternates.get("alternate_1_label"),
                 "alternate_2_id": alternates.get("alternate_2_id"),
                 "alternate_2_label": alternates.get("alternate_2_label"),
+            }
+        )
+
+    # Hip-vs-spine ambiguity: vague "pain" often fits both -- ask a real
+    # screening question instead of a weak "is it more like X or Y?".
+    hip_match = next(
+        (m for m in matches[:3] if getattr(terms_by_id.get(m.get("term_id")), "body_part", None) == "Hip"),
+        None,
+    )
+    spine_match = next(
+        (
+            m
+            for m in matches[:3]
+            if getattr(terms_by_id.get(m.get("term_id")), "body_part", None) == "Back/Neck"
+        ),
+        None,
+    )
+    if hip_match and spine_match:
+        hip_term = terms_by_id[hip_match["term_id"]]
+        spine_term = terms_by_id[spine_match["term_id"]]
+        return jsonify(
+            {
+                "status": "needs_triage",
+                "triage_question": HIP_SPINE_TRIAGE_QUESTION,
+                "hip_term_id": hip_term.id,
+                "hip_label": hip_match.get("spoken_label", hip_term.term),
+                "spine_term_id": spine_term.id,
+                "spine_label": spine_match.get("spoken_label", spine_term.term),
             }
         )
 
@@ -236,6 +302,73 @@ def match_issue():
             "status": "needs_clarification",
             "candidates": candidate_payload,
             "clarify_prompt": clarify_prompt,
+        }
+    )
+
+
+@routing_bp.post("/resolve-triage")
+@require_agent_key
+def resolve_triage():
+    """Resolves the hip-vs-spine screening answer (see needs_triage in
+    match_issue) to one of the two candidate terms. Mirrors match_issue's
+    "matched" response shape."""
+    payload = get_agent_json()
+    triage_answer = (payload.get("triage_answer") or "").strip()
+    hip_term_id = coerce_int(payload.get("hip_term_id"))
+    spine_term_id = coerce_int(payload.get("spine_term_id"))
+    if not triage_answer or not hip_term_id or not spine_term_id:
+        return (
+            jsonify({"error": "triage_answer, hip_term_id, and spine_term_id are required"}),
+            400,
+        )
+
+    hip_term = db.session.get(Term, hip_term_id)
+    spine_term = db.session.get(Term, spine_term_id)
+    if hip_term is None or spine_term is None:
+        return jsonify({"status": "no_match", "spoken_response": NO_MATCH_RESPONSE})
+
+    try:
+        verdict = _classify_hip_or_spine_answer(HIP_SPINE_TRIAGE_QUESTION, triage_answer)
+    except Exception:
+        current_app.logger.exception("LLM resolve-triage call failed")
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "spoken_response": (
+                        "I'm having trouble understanding right now -- let me have someone "
+                        "from our office call you right back."
+                    ),
+                }
+            ),
+            503,
+        )
+
+    if verdict == "UNCLEAR":
+        return jsonify(
+            {
+                "status": "still_unclear",
+                "spoken_response": (
+                    "I want to make sure I get you to the right specialist -- would you "
+                    "like to see our hip specialist, or our spine specialist?"
+                ),
+            }
+        )
+
+    chosen, other = (hip_term, spine_term) if verdict == "HIP" else (spine_term, hip_term)
+    region_label = "hip" if verdict == "HIP" else "spine"
+    return jsonify(
+        {
+            "status": "matched",
+            "term": _term_payload(chosen),
+            "confirm_prompt": (
+                f"Based on that, it sounds like our {region_label} team would be the "
+                "right fit -- does that sound right?"
+            ),
+            "alternate_1_id": other.id,
+            "alternate_1_label": other.term,
+            "alternate_2_id": None,
+            "alternate_2_label": None,
         }
     )
 
@@ -361,12 +494,8 @@ def find_doctors():
     zip_value = payload.get("zip")
     call_id = payload.get("call_id")
 
-    # Falls back to the term match-issue already recorded on the call (via
-    # update_call) when the flow doesn't pass term_id explicitly -- Vogent's
-    # flow graph can reach this node from more than one upstream path (a
-    # direct match vs. one that needed a clarifying round), and the call
-    # record is the one place both paths agree on, rather than each flow
-    # node needing to know which upstream node's output to reference.
+    # Fall back to the term recorded on the call -- multiple upstream flow
+    # paths converge here and the call record is what they agree on.
     if not term_id and call_id:
         call = Call.query.filter_by(vogent_call_id=call_id).first()
         term_id = call.matched_term_id if call else None
@@ -385,9 +514,7 @@ def find_doctors():
     caller_coords = _zip_coords(zip_value)
     age = _age_from_dob(dob)
 
-    # Eager-load doctor -> doctor_practices -> practice in this one query --
-    # ranking below touches every eligible doctor's full practice list, which
-    # would otherwise be a lazy-loaded round trip per doctor and per practice.
+    # Eager-load doctor -> doctor_practices -> practice to avoid N+1 queries.
     all_eligibility = (
         TermEligibility.query.filter(
             TermEligibility.term_id == term.id, TermEligibility.doctor.has(active=True)
@@ -442,19 +569,11 @@ def find_doctors():
             "status": "matched",
             "term_urgency": term.urgency,
             "doctors": doctors_payload,
-            # Flat top-choice fields alongside the full ranked array: Vogent's
-            # flow templates can interpolate an array into prompt TEXT (for
-            # the model to read) but cannot index into it (doctors[0].x) as a
-            # scalar input to a downstream function -- these give the flow a
-            # scalar doctor_id/practice_id for the top-ranked pair without a
-            # caller-facing choice step, since we always try the closest
-            # eligible doctor first.
+            # Flat fields: Vogent can't index into the doctors array as a
+            # scalar function input, only interpolate it into prompt text.
             "best_doctor_id": top["doctor_id"],
             "best_practice_id": top["practice"]["id"],
             "best_doctor_spoken_label": top["spoken_label"],
-            # Short form ("Dr. Michael Fracchia") for every mention after the
-            # first -- the flow only needs the full spoken_label once, when
-            # the doctor is first introduced.
-            "best_doctor_name": top["name"],
+            "best_doctor_name": top["name"],  # short form, for mentions after the first
         }
     )

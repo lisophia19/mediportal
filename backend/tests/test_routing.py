@@ -209,6 +209,107 @@ def test_match_issue_needs_clarification(client, db, agent_headers, monkeypatch)
     assert "clarify_prompt" in body
 
 
+def test_match_issue_ambiguous_hip_vs_spine_triggers_triage(client, db, agent_headers, monkeypatch):
+    """Hip and spine share vague, overlapping presentations ("pain") often
+    enough that the generic 'is it more like X or Y' clarify_prompt is a
+    weak question -- this specific ambiguity should trigger the dedicated
+    screening question instead."""
+    hip_term = _make_term(db, term="Pain-Hip", body_part="Hip", category="pain")
+    spine_term = _make_term(db, term="Pain-Back", body_part="Back/Neck", category="pain")
+    db.commit()
+    _mock_llm(
+        monkeypatch,
+        {
+            "ortho_relevant": True,
+            "matches": [
+                {"term_id": hip_term.id, "confidence": 0.5, "spoken_label": "hip pain"},
+                {"term_id": spine_term.id, "confidence": 0.45, "spoken_label": "back pain"},
+            ],
+        },
+    )
+
+    resp = client.post(
+        "/api/v1/routing/match-issue",
+        json={"complaint_text": "I have some pain", "call_id": "vg_3"},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "needs_triage"
+    assert body["hip_term_id"] == hip_term.id
+    assert body["spine_term_id"] == spine_term.id
+    assert "triage_question" in body
+
+
+def test_resolve_triage_hip_answer(client, db, agent_headers, monkeypatch):
+    hip_term = _make_term(db, term="Pain-Hip", body_part="Hip", category="pain")
+    spine_term = _make_term(db, term="Pain-Back", body_part="Back/Neck", category="pain")
+    db.commit()
+    monkeypatch.setattr(routing_module, "_classify_hip_or_spine_answer", lambda q, a: "HIP")
+
+    resp = client.post(
+        "/api/v1/routing/resolve-triage",
+        json={
+            "triage_answer": "it mostly just stays in one spot",
+            "hip_term_id": hip_term.id,
+            "spine_term_id": spine_term.id,
+            "call_id": "vg_3",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched"
+    assert body["term"]["id"] == hip_term.id
+    assert body["alternate_1_id"] == spine_term.id
+
+
+def test_resolve_triage_spine_answer(client, db, agent_headers, monkeypatch):
+    hip_term = _make_term(db, term="Pain-Hip", body_part="Hip", category="pain")
+    spine_term = _make_term(db, term="Pain-Back", body_part="Back/Neck", category="pain")
+    db.commit()
+    monkeypatch.setattr(routing_module, "_classify_hip_or_spine_answer", lambda q, a: "SPINE")
+
+    resp = client.post(
+        "/api/v1/routing/resolve-triage",
+        json={
+            "triage_answer": "it shoots down my leg",
+            "hip_term_id": hip_term.id,
+            "spine_term_id": spine_term.id,
+            "call_id": "vg_3",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched"
+    assert body["term"]["id"] == spine_term.id
+    assert body["alternate_1_id"] == hip_term.id
+
+
+def test_resolve_triage_unclear_answer(client, db, agent_headers, monkeypatch):
+    hip_term = _make_term(db, term="Pain-Hip", body_part="Hip", category="pain")
+    spine_term = _make_term(db, term="Pain-Back", body_part="Back/Neck", category="pain")
+    db.commit()
+    monkeypatch.setattr(routing_module, "_classify_hip_or_spine_answer", lambda q, a: "UNCLEAR")
+
+    resp = client.post(
+        "/api/v1/routing/resolve-triage",
+        json={
+            "triage_answer": "I don't really know",
+            "hip_term_id": hip_term.id,
+            "spine_term_id": spine_term.id,
+            "call_id": "vg_3",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "still_unclear"
+    assert "spoken_response" in body
+
+
+def test_resolve_triage_requires_fields(client, agent_headers):
+    resp = client.post("/api/v1/routing/resolve-triage", json={}, headers=agent_headers)
+    assert resp.status_code == 400
+
+
 def test_match_issue_no_match(client, db, agent_headers, monkeypatch):
     _make_term(db)
     db.commit()

@@ -48,7 +48,7 @@ from app.seed.synthetic import (
     seed_users,
 )
 
-XLSX_PATH = Path(__file__).resolve().parent / "Mediportal Information FINAL.xlsx"
+XLSX_PATH = Path(__file__).resolve().parent / "data" / "Mediportal Information FINAL.xlsx"
 
 # Expected counts per spec §8.1 -- printed and checked against the actual
 # seed result so a spreadsheet or parsing change that silently breaks the

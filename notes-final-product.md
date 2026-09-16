@@ -50,6 +50,14 @@ it freely as more requirements surface. Nothing here is committed to or schedule
   logic is not.
 - **Clinical restrictions / "For Consideration" fields.** `Provider Info` carries
   free-text restriction notes per provider that the baseline ignores entirely.
+- **Triage beyond hip vs. spine.** Baseline's `needs_triage` branch (§5.1) only fires
+  for the Hip/Back-Neck ambiguity. Other body-part pairs have the same real referred-
+  pain overlap and deserve the same treatment: **hip vs. knee** (hip arthritis
+  classically refers pain into the knee) and **neck vs. shoulder** (cervical
+  radiculopathy presents as shoulder/arm pain) are the clinically common ones;
+  **elbow vs. hand/wrist** (nerve entrapment referral, e.g. cubital tunnel) is real but
+  less common as a phone-intake ambiguity. Today these fall through to the generic
+  `needs_clarification`/alternates flow instead of a dedicated screening question.
 
 ## Call handling
 
