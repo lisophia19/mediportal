@@ -8,5 +8,6 @@
   "book_appointment": "4c13e8a4-48c4-49ee-89d4-65e714f97c1a",
   "update_call": "6cf28e44-9246-4b09-aa32-aef65ff4a083",
   "complete_call": "46f2414d-4c6f-4255-858d-6860779e1df1",
-  "confirm_patient": "f49ff6df-74ed-4e37-b198-8f053f4d2421"
+  "confirm_patient": "f49ff6df-74ed-4e37-b198-8f053f4d2421",
+  "resolve_triage": "e915786e-4444-400c-82b1-3961a67ad1d7"
 }
