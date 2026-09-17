@@ -133,6 +133,15 @@ it freely as more requirements surface. Nothing here is committed to or schedule
 
 ## Platform and operations
 
+- **Automated AI-to-AI call testing.** Built (`vogent/test_caller_setup.py`,
+  `vogent/run_test_calls.py`, 4 scripted scenarios) but structurally blocked on the
+  current Vogent plan: an agent-to-agent test call needs 2 concurrent call sessions
+  (the test-caller's outbound leg and the mediportal-agent's inbound leg, running
+  simultaneously) but this account's concurrency limit is 1 — every attempt fails
+  instantly as `busy` regardless of which numbers are used. A real human caller never
+  hits this (they only ever need 1 slot). Unblocking this needs a Vogent plan upgrade
+  to a concurrency limit of 2+; until then, testing is manual (call (703) 880-8652
+  directly). The agent and scripts are left in place, unused.
 - **Deployment.** Docker + AWS EC2 per CLAUDE.md — one container for backend, one for
   frontend, reachable, not on a laptop. Explicitly out of scope for the baseline pass.
 - **CI/CD**, migrations strategy, environment separation.
