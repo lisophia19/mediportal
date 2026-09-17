@@ -188,8 +188,16 @@ def _classify_complaint(complaint_text, candidates):
     prompt = (
         "You are the intake matcher for an orthopedic practice's phone-booking agent. "
         "Match the patient's spoken complaint to ONE OR MORE of the candidate clinical "
-        "terms below. Never invent a term outside this list. If nothing here is a "
-        "reasonable orthopedic match, say so honestly instead of guessing.\n\n"
+        "terms below. Never invent a term outside this list. Set ortho_relevant=false "
+        "ONLY when the complaint clearly describes something non-orthopedic (a headache, "
+        "chest pain, a skin rash, etc.) -- a real front-desk person would never turn "
+        "away a caller just for being vague about a bone/joint/muscle complaint. If the "
+        "complaint mentions pain, an injury, or a joint/limb/back issue but doesn't say "
+        "specifically enough to be confident which one, still set ortho_relevant=true "
+        "and return your best-guess matches from the list at low confidence (a real "
+        "intake person would ask a follow-up question, not decline the patient) -- do "
+        "not return an empty matches array unless the complaint is truly unrelated to "
+        "orthopedics.\n\n"
         f"Candidate terms:\n{term_lines}\n\n"
         f'Patient complaint: "{complaint_text}"\n\n'
         "Respond with ONLY JSON, no prose, in exactly this shape:\n"
