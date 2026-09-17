@@ -24,6 +24,7 @@ class TestConfig(Config):
     )
     AGENT_KEY = "test-agent-key"
     SECRET_KEY = "test-secret"
+    VOGENT_WEBHOOK_SECRET = "test-webhook-secret"
 
 
 @pytest.fixture(scope="session")

@@ -26,6 +26,7 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-mediportal}:${POSTGRES_PASSWORD:-mediportal}@postgres:5432/${POSTGRES_DB:-mediportal}
       SECRET_KEY: ${SECRET_KEY}
       AGENT_KEY: ${AGENT_KEY}
+      VOGENT_WEBHOOK_SECRET: ${VOGENT_WEBHOOK_SECRET}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
       SCHEDULING_PROVIDER: ${SCHEDULING_PROVIDER:-postgres}
