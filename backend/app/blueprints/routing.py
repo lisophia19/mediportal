@@ -30,10 +30,9 @@ from ..models import (
 
 routing_bp = Blueprint("routing", __name__, url_prefix="/api/v1/routing")
 
-# §5.1 confidence thresholds: below CLARIFY is a dead end, above MATCH is
-# confident, in between needs a disambiguating question.
+# §5.1 confidence threshold: at/above MATCH is confident, below needs a
+# disambiguating question (never a no_match decline -- see match_issue).
 MATCH_CONFIDENCE = 0.75
-CLARIFY_CONFIDENCE = 0.35
 MATCH_GAP = 0.15  # top candidate must clear runner-up by this much
 MAX_CANDIDATE_TERMS = 12
 
@@ -272,7 +271,13 @@ def match_issue():
     matches = sorted(result.get("matches") or [], key=lambda m: m.get("confidence", 0), reverse=True)
     terms_by_id = {t.id: t for t in candidates}
 
-    if not result.get("ortho_relevant") or not matches or matches[0].get("confidence", 0) < CLARIFY_CONFIDENCE:
+    # ortho_relevant is the "should we engage at all" signal; confidence
+    # only decides matched vs. needs_clarification/needs_triage below. A
+    # real complaint ("a lot of pain, not sure what's causing it") can be
+    # genuinely orthopedic but too vague to name a specific term -- that
+    # should prompt a clarifying question, not a no_match decline (a real
+    # front-desk person asks "where does it hurt?", they don't hang up).
+    if not result.get("ortho_relevant") or not matches:
         return jsonify({"status": "no_match", "spoken_response": NO_MATCH_RESPONSE})
 
     top = matches[0]

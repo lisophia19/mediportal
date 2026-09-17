@@ -381,6 +381,38 @@ def test_resolve_triage_requires_fields(client, agent_headers):
     assert resp.status_code == 400
 
 
+def test_match_issue_low_confidence_ortho_relevant_clarifies_not_no_match(
+    client, db, agent_headers, monkeypatch
+):
+    """Regression test for a real production miss: "I have a lot of pain,
+    not sure what's causing it" is genuinely orthopedic but too vague to
+    name a specific term -- the LLM honestly returns low-confidence
+    matches (ortho_relevant=true), which used to get declined as no_match
+    outright by a confidence floor. It should ask a clarifying question
+    instead, the way a real front-desk person would."""
+    back = _make_term(db, term="Pain-Back", body_part="Back/Neck")
+    elbow = _make_term(db, term="Pain-Elbow", body_part="Elbow")
+    db.commit()
+    _mock_llm(
+        monkeypatch,
+        {
+            "ortho_relevant": True,
+            "matches": [
+                {"term_id": back.id, "confidence": 0.2, "spoken_label": "back pain"},
+                {"term_id": elbow.id, "confidence": 0.15, "spoken_label": "elbow pain"},
+            ],
+        },
+    )
+
+    resp = client.post(
+        "/api/v1/routing/match-issue",
+        json={"complaint_text": "I have a lot of pain, not sure what's causing it", "call_id": "vg_lowconf"},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "needs_clarification"
+
+
 def test_match_issue_no_match(client, db, agent_headers, monkeypatch):
     _make_term(db)
     db.commit()
