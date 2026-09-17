@@ -4,6 +4,7 @@
 import json
 import math
 import os
+import re
 from datetime import date
 
 from anthropic import Anthropic
@@ -113,15 +114,22 @@ def _zip_coords(zip_value):
 
 def _candidate_terms(complaint_text):
     """Cheap keyword pre-filter over term/body_part/category/patient_phrasing
-    so the LLM prompt stays small (spec §5.1 step 1)."""
+    so the LLM prompt stays small (spec §5.1 step 1). Matches whole words,
+    not substrings -- a naive `word in haystack` check let common words like
+    "for" spuriously match inside unrelated term/category text (e.g. "for"
+    is a substring of "Deformity"), crowding out real candidates like
+    Pain-Knee for a real complaint mentioning "for a few months"."""
     words = {w.strip(".,!?").lower() for w in complaint_text.split() if len(w) > 2}
     terms = Term.query.all()
     scored = []
     for term in terms:
-        haystack = " ".join(
-            filter(None, [term.term, term.body_part, term.category, *(term.patient_phrasing or [])])
-        ).lower()
-        score = sum(1 for word in words if word in haystack)
+        haystack_words = {
+            w.lower()
+            for phrase in filter(None, [term.term, term.body_part, term.category, *(term.patient_phrasing or [])])
+            for w in re.split(r"[\s/-]+", phrase)
+            if w
+        }
+        score = len(words & haystack_words)
         if score:
             scored.append((score, term))
     scored.sort(key=lambda pair: pair[0], reverse=True)

@@ -70,6 +70,31 @@ def _make_term(db, **overrides):
     return term
 
 
+def test_candidate_terms_matches_whole_words_not_substrings(client, db):
+    """Regression test for a real production miss: a genuine knee-pain
+    complaint ("...for a few months...") never surfaced Pain-Knee or
+    Osteo/Arthritis-Knee as candidates -- the old substring-based pre-filter
+    let "for" spuriously match inside "Deformity" (category text), crowding
+    out the real knee terms with unrelated hand/foot/wrist deformity terms."""
+    knee_pain = _make_term(
+        db, term="Pain-Knee", body_part="Knee/LE", category="pain", patient_phrasing=[]
+    )
+    hand_deformity = _make_term(
+        db, term="Congenital Deformity-Hand", body_part="Hand/Wrist", category="Deformity", patient_phrasing=[]
+    )
+    db.commit()
+
+    candidates = routing_module._candidate_terms(
+        "My right knee has been bothering me for a few months now. It's swollen "
+        "and pretty stiff, especially in the mornings after I've been sitting "
+        "for a little while."
+    )
+
+    candidate_ids = {t.id for t in candidates}
+    assert knee_pain.id in candidate_ids
+    assert hand_deformity.id not in candidate_ids
+
+
 # --- §5.1 match-issue ---------------------------------------------------
 
 
