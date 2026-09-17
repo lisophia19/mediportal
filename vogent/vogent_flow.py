@@ -594,12 +594,17 @@ nodes = [
         (
             "Let the caller know you found some openings with "
             "{{node.find_doctors_fn.best_doctor_name}} -- just the name, you already "
-            "gave their specialty and office a moment ago, do not repeat it. If "
-            "{{node.check_availability_fn.urgent_window_met}} is false, first let the "
-            "caller know honestly that you could not find anything within the next "
-            "few days for this urgent issue, but here is the soonest opening you do "
-            "have, before listing it. Read out up to 3 of the soonest options from "
-            "this list, phrased conversationally -- never read a raw timestamp "
+            "gave their specialty and office a moment ago, do not repeat it. This "
+            "visit is NOT urgent unless urgent_window_met is present and literally "
+            "the boolean false -- if urgent_window_met is blank, missing, or not "
+            "present at all (the normal case for a routine visit), never mention "
+            "urgency, being unable to find something sooner, or apologize for the "
+            "timing at all, just offer the slots plainly. Only when "
+            "{{node.check_availability_fn.urgent_window_met}} is explicitly false, "
+            "first let the caller know honestly that you could not find anything "
+            "within the next few days for this urgent issue, before listing the "
+            "soonest opening you do have. Read out up to 3 of the soonest options "
+            "from this list, phrased conversationally -- never read a raw timestamp "
             "verbatim: {{node.check_availability_fn.slots}}"
         ),
         answer_guidelines=(
