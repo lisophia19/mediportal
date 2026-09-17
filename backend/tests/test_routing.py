@@ -95,6 +95,52 @@ def test_candidate_terms_matches_whole_words_not_substrings(client, db):
     assert hand_deformity.id not in candidate_ids
 
 
+def test_candidate_terms_ignores_filler_word_overlap(client, db):
+    """Regression test: "and" in the complaint's own filler text used to
+    exact-match "and" inside the body_part "Foot and Ankle", giving every
+    foot/ankle term a spurious +1 over terms that only scored on "pain" --
+    real vague complaint "...a lot of pain...and I'm not sure..." matched
+    only Foot and Ankle terms, never Back/Neck or Hip."""
+    back_pain = _make_term(
+        db, term="Pain-Back", body_part="Back/Neck", category="pain", patient_phrasing=[]
+    )
+    ankle_pain = _make_term(
+        db, term="Pain-Ankle", body_part="Foot and Ankle", category="pain", patient_phrasing=[]
+    )
+    db.commit()
+
+    candidates = routing_module._candidate_terms(
+        "I've been I've got a lot of pain lately, and I'm not really sure what's causing it."
+    )
+
+    scores = {t.id: i for i, t in enumerate(candidates)}
+    assert back_pain.id in scores
+    assert ankle_pain.id in scores
+    # Both score equally on "pain" alone -- neither should be pushed out by
+    # the complaint's own filler word "and" matching "Foot and Ankle".
+
+
+def test_candidate_terms_diversifies_tied_scores_across_body_parts(client, db, monkeypatch):
+    """Regression test: with many terms tied at the same keyword-overlap
+    score, id order used to cluster low-id body parts in the top
+    MAX_CANDIDATE_TERMS, silently excluding others (e.g. Hip) needed for
+    hip-vs-spine triage to even reach the LLM. Round-robin across body_part
+    instead."""
+    monkeypatch.setattr(routing_module, "MAX_CANDIDATE_TERMS", 2)
+    hip = _make_term(db, term="Pain-Hip", body_part="Hip", category="pain", patient_phrasing=[])
+    back = _make_term(db, term="Pain-Back", body_part="Back/Neck", category="pain", patient_phrasing=[])
+    # A third same-body-part term with a lower id than `back` would win a
+    # pure id-order tiebreak and crowd it out -- diversification must not
+    # let that happen once every body_part has at least one slot.
+    another_hip = _make_term(db, term="Pain-Groin", body_part="Hip", category="pain", patient_phrasing=[])
+    db.commit()
+
+    candidates = routing_module._candidate_terms("I have a lot of pain.")
+    candidate_ids = {t.id for t in candidates}
+    assert hip.id in candidate_ids or another_hip.id in candidate_ids
+    assert back.id in candidate_ids
+
+
 # --- §5.1 match-issue ---------------------------------------------------
 
 

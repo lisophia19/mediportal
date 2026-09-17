@@ -112,6 +112,20 @@ def _zip_coords(zip_value):
 # --- §5.1 match-issue --------------------------------------------------------
 
 
+# Filler words excluded from the pre-filter's word-overlap scoring --
+# without this, a complaint's own connective words can coincidentally
+# exact-match a term's structural text (e.g. "and" in complaint text
+# matching "and" inside the body_part "Foot and Ankle"), spuriously
+# outranking real candidates that only score on the actual clinical word.
+_STOPWORDS = {
+    "the", "and", "for", "with", "have", "has", "had", "been", "not",
+    "really", "just", "got", "get", "lot", "lately", "sure", "what",
+    "when", "where", "that", "this", "these", "those", "kind", "sort",
+    "little", "bit", "few", "some", "any", "all", "very", "more", "most",
+    "now", "ago", "since", "still", "also", "like", "about", "than",
+}
+
+
 def _candidate_terms(complaint_text):
     """Cheap keyword pre-filter over term/body_part/category/patient_phrasing
     so the LLM prompt stays small (spec §5.1 step 1). Matches whole words,
@@ -119,7 +133,7 @@ def _candidate_terms(complaint_text):
     "for" spuriously match inside unrelated term/category text (e.g. "for"
     is a substring of "Deformity"), crowding out real candidates like
     Pain-Knee for a real complaint mentioning "for a few months"."""
-    words = {w.strip(".,!?").lower() for w in complaint_text.split() if len(w) > 2}
+    words = {w.strip(".,!?").lower() for w in complaint_text.split() if len(w) > 2} - _STOPWORDS
     terms = Term.query.all()
     scored = []
     for term in terms:
@@ -132,11 +146,30 @@ def _candidate_terms(complaint_text):
         score = len(words & haystack_words)
         if score:
             scored.append((score, term))
-    scored.sort(key=lambda pair: pair[0], reverse=True)
     if scored:
-        return [term for _, term in scored[:MAX_CANDIDATE_TERMS]]
+        return _diversify_by_body_part(scored)[:MAX_CANDIDATE_TERMS]
     # No keyword overlap -- let the LLM reason instead of auto no_match.
     return terms[:MAX_CANDIDATE_TERMS]
+
+
+def _diversify_by_body_part(scored):
+    """Within each score tier, round-robins across body_part instead of the
+    arbitrary id order Term.query.all() returns -- a vague complaint like
+    "I have pain" ties every Pain-* term at the same score, and raw id
+    order happened to cluster low ids on Back/Neck, pushing Pain-Hip just
+    outside the candidate cutoff and silently breaking hip-vs-spine triage
+    (it needs both body parts to even reach the LLM)."""
+    tiers = {}
+    for score, term in scored:
+        tiers.setdefault(score, {}).setdefault(term.body_part, []).append(term)
+    result = []
+    for score in sorted(tiers, reverse=True):
+        buckets = tiers[score]
+        while any(buckets.values()):
+            for body_part in list(buckets):
+                if buckets[body_part]:
+                    result.append(buckets[body_part].pop(0))
+    return result
 
 
 def _anthropic_client():
