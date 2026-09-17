@@ -1,6 +1,6 @@
 # Tests for call capture lifecycle (spec §5.7): create -> patch ->
 # complete, idempotent complete, and auth gating.
-from .factories import make_term
+from .factories import make_appointment, make_doctor, make_patient, make_practice, make_slot, make_term
 
 
 def test_requires_agent_key(client):
@@ -120,6 +120,32 @@ def test_complete_call_is_idempotent(client, agent_headers):
     call = Call.query.filter_by(vogent_call_id="vg_complete").first()
     assert call.status == "scheduled"
     assert len(call.transcript) == 1
+
+
+def test_complete_call_records_appointment_id(client, db, agent_headers):
+    """Regression test: complete_call used to only accept status/transcript
+    -- a real scheduled call left calls.appointment_id NULL forever, so the
+    dashboard showed "No appointment booked" even for booked calls."""
+    term = make_term(db)
+    doctor = make_doctor(db)
+    practice = make_practice(db)
+    slot = make_slot(doctor, practice, db)
+    patient = make_patient(db)
+    appointment = make_appointment(patient, slot, term, db)
+
+    client.post("/api/v1/calls", headers=agent_headers, json={"vogent_call_id": "vg_appt"})
+
+    resp = client.post(
+        "/api/v1/calls/vg_appt/complete",
+        headers=agent_headers,
+        json={"status": "scheduled", "appointment_id": f"{appointment.id}.000000"},
+    )
+    assert resp.status_code == 200
+
+    from app.models import Call
+
+    call = Call.query.filter_by(vogent_call_id="vg_appt").first()
+    assert call.appointment_id == appointment.id
 
 
 def test_update_and_complete_reachable_via_static_body_id_routes(client, agent_headers):

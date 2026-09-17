@@ -82,6 +82,19 @@ FUNCTIONS = [
         ),
     ),
     (
+        "update_patient_zip",
+        "Persist the ZIP asked later in the call onto the patient this call resolved to.",
+        "/patients/update-zip",
+        _schema(
+            {
+                "zip": {"type": "string"},
+                "patient_id": {"type": "integer"},
+                "call_id": {"type": "string"},
+            },
+            ["zip"],
+        ),
+    ),
+    (
         "match_issue",
         "Match the caller's free-text complaint to a clinical term (spec §5.1).",
         "/routing/match-issue",

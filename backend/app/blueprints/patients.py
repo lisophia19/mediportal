@@ -142,3 +142,30 @@ def create_patient():
     db.session.add(patient)
     db.session.commit()
     return jsonify({"status": "created", "patient": serialize_patient(patient)}), 201
+
+
+@patients_bp.post("/update-zip")
+@require_agent_key
+def update_patient_zip():
+    """Persists the ZIP asked later in the call (spec §6 step 2c) onto
+    whichever patient this call resolved to -- new or returning, via
+    call_id, since the flow asks ZIP after patient lookup/creation."""
+    payload = get_agent_json()
+    zip_value = (payload.get("zip") or "").strip()
+    patient_id = coerce_int(payload.get("patient_id"))
+    call_id = payload.get("call_id")
+
+    if not patient_id and call_id:
+        call = Call.query.filter_by(vogent_call_id=call_id).first()
+        patient_id = call.patient_id if call else None
+
+    if not patient_id or not zip_value:
+        return jsonify({"error": "patient_id (or call_id) and zip are required"}), 400
+
+    patient = db.session.get(Patient, patient_id)
+    if patient is None:
+        return jsonify({"error": "unknown patient_id"}), 400
+
+    patient.home_zip = zip_value
+    db.session.commit()
+    return jsonify({"status": "ok"})

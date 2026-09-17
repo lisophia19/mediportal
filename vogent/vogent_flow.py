@@ -257,7 +257,7 @@ nodes = [
     question_node(
         "confirm_patient_readback", "confirm-patient-readback",
         "{{node.lookup_patient.confirm_prompt}}",
-        answer_guidelines="If the caller confirms this is them (yes, correct, that's right, etc.), respond with exactly YES. Otherwise respond with exactly NO.",
+        answer_guidelines="Classify the caller's reply as YES or NO for the answer field only -- never say the word YES or NO out loud yourself.",
         transitions=[
             equal("confirm_patient_readback", "answer", "YES", "confirm_patient_fn"),
             always("dead_end_ambiguous"),
@@ -311,6 +311,12 @@ nodes = [
         "ask_zip", "ask-zip",
         "What's your ZIP code, or the town you're in?",
         answer_guidelines="If the caller gives a 5-digit ZIP code, respond with just those 5 digits. Otherwise respond with the town or city name they gave.",
+        transitions=[always("save_zip")],
+    ),
+    function_node(
+        "save_zip", "save-zip", "update_patient_zip",
+        inputs={"zip": "{{node.ask_zip.answer}}"},
+        outputs=[out("status", "STRING")],
         transitions=[always("confirm_details")],
     ),
     question_node(
@@ -368,7 +374,7 @@ nodes = [
     question_node(
         "confirm_complaint", "confirm-complaint",
         "{{node.match_issue_fn.confirm_prompt}}",
-        answer_guidelines="If the caller confirms (yes, correct, etc.) respond with exactly YES. Otherwise respond with exactly NO.",
+        answer_guidelines="Classify the caller's reply as YES or NO for the answer field only -- never say the word YES or NO out loud yourself.",
         transitions=[
             equal("confirm_complaint", "answer", "YES", "save_term_matched"),
             always("offer_alternates"),
@@ -447,7 +453,7 @@ nodes = [
     question_node(
         "confirm_triage", "confirm-triage",
         "{{node.resolve_triage_fn.confirm_prompt}}",
-        answer_guidelines="If the caller confirms (yes, correct, etc.) respond with exactly YES. Otherwise respond with exactly NO.",
+        answer_guidelines="Classify the caller's reply as YES or NO for the answer field only -- never say the word YES or NO out loud yourself.",
         transitions=[
             equal("confirm_triage", "answer", "YES", "save_term_triaged"),
             always("ask_complaint"),
@@ -518,7 +524,7 @@ nodes = [
     question_node(
         "confirm_complaint_2", "confirm-complaint-2",
         "{{node.match_issue_retry_fn.confirm_prompt}}",
-        answer_guidelines="If the caller confirms (yes, correct, etc.) respond with exactly YES. Otherwise respond with exactly NO.",
+        answer_guidelines="Classify the caller's reply as YES or NO for the answer field only -- never say the word YES or NO out loud yourself.",
         transitions=[
             equal("confirm_complaint_2", "answer", "YES", "save_term_clarified"),
             always("dead_end_no_match_clarified"),
@@ -646,7 +652,10 @@ nodes = [
     ),
     function_node(
         "log_scheduled_fn", "log-scheduled-fn", "complete_call",
-        inputs={"status": "scheduled"},
+        inputs={
+            "status": "scheduled",
+            "appointment_id": "{{node.book_appointment_fn.appointment_id}}",
+        },
         outputs=[out("status", "STRING")],
         transitions=[always("confirm_booking")],
     ),

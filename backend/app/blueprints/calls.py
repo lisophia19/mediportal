@@ -88,6 +88,8 @@ def complete_call(vogent_call_id):
     body = get_agent_json()
     if "transcript" in body:
         call.transcript = body["transcript"]
+    if "appointment_id" in body:
+        call.appointment_id = coerce_int(body["appointment_id"])
     call.status = body.get("status", call.status)
     call.ended_at = datetime.now(timezone.utc)
 

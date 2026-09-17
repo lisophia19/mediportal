@@ -199,3 +199,40 @@ def test_lookup_requires_agent_key(client, db):
         json={"last_name": "Rodriguez", "date_of_birth": "1991-04-02", "call_id": "vg_x"},
     )
     assert resp.status_code == 401
+
+
+def test_update_zip_via_explicit_patient_id(client, db, agent_headers):
+    patient = _make_patient(db, home_zip=None)
+    resp = client.post(
+        "/api/v1/patients/update-zip",
+        headers=agent_headers,
+        json={"patient_id": patient.id, "zip": "10001"},
+    )
+    assert resp.status_code == 200
+    assert db.get(Patient, patient.id).home_zip == "10001"
+
+
+def test_update_zip_falls_back_to_call_patient_id(client, db, agent_headers):
+    """Regression test: the flow asks ZIP after patient lookup/creation, so
+    this route (called from that later point in the call) must resolve
+    which patient to update from the call record, same as every other
+    late-in-call endpoint that can't rely on the flow re-passing an id."""
+    patient = _make_patient(db, home_zip=None)
+    call = _make_call(db, vogent_call_id="vg_zip")
+    call.patient_id = patient.id
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/patients/update-zip",
+        headers=agent_headers,
+        json={"call_id": "vg_zip", "zip": "07030"},
+    )
+    assert resp.status_code == 200
+    assert db.get(Patient, patient.id).home_zip == "07030"
+
+
+def test_update_zip_requires_patient_and_zip(client, agent_headers):
+    resp = client.post(
+        "/api/v1/patients/update-zip", headers=agent_headers, json={"zip": "10001"}
+    )
+    assert resp.status_code == 400
