@@ -102,6 +102,10 @@ FUNCTIONS = [
             {
                 "complaint_text": {"type": "string", "description": "Caller's complaint, verbatim"},
                 "call_id": {"type": "string"},
+                "final_attempt": {
+                    "type": "string",
+                    "description": "'true' on the retry round: commit to the best candidate instead of asking again",
+                },
             },
             ["complaint_text"],
         ),

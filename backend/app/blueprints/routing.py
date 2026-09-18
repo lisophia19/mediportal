@@ -246,6 +246,31 @@ def _strip_markdown_fence(text):
     return text.strip()
 
 
+def _matched_response(top, top_term, matches, terms_by_id):
+    """The §5.1 "matched" payload. Alternates are flattened (not a nested
+    array) because Vogent can only pass scalars as function inputs."""
+    alternates = {}
+    for i, match in enumerate(matches[1:3], start=1):
+        term = terms_by_id.get(match.get("term_id"))
+        if term is not None:
+            alternates[f"alternate_{i}_id"] = term.id
+            alternates[f"alternate_{i}_label"] = match.get("spoken_label", term.term)
+    return jsonify(
+        {
+            "status": "matched",
+            "term": _term_payload(top_term),
+            "confidence": top.get("confidence"),
+            "confirm_prompt": (
+                f"It sounds like this is {top.get('spoken_label', top_term.term)} -- is that right?"
+            ),
+            "alternate_1_id": alternates.get("alternate_1_id"),
+            "alternate_1_label": alternates.get("alternate_1_label"),
+            "alternate_2_id": alternates.get("alternate_2_id"),
+            "alternate_2_label": alternates.get("alternate_2_label"),
+        }
+    )
+
+
 def _term_payload(term):
     return {
         "id": term.id,
@@ -269,6 +294,8 @@ def match_issue():
     payload = get_agent_json()
     complaint_text = (payload.get("complaint_text") or "").strip()
     call_id = payload.get("call_id")
+    # Vogent sends every input as a string, so "false"/"" must not read true.
+    final_attempt = str(payload.get("final_attempt") or "").strip().lower() in ("1", "true", "yes")
     if not complaint_text or not call_id:
         return jsonify({"error": "complaint_text and call_id are required"}), 400
 
@@ -314,26 +341,16 @@ def match_issue():
 
     gap_clears = len(matches) == 1 or (top.get("confidence", 0) - matches[1].get("confidence", 0)) >= MATCH_GAP
     if top.get("confidence", 0) >= MATCH_CONFIDENCE and gap_clears:
-        confirm_prompt = f"It sounds like this is {top.get('spoken_label', top_term.term)} -- is that right?"
-        # Flattened (not nested) so Vogent can use them as scalar inputs.
-        alternates = {}
-        for i, match in enumerate(matches[1:3], start=1):
-            term = terms_by_id.get(match.get("term_id"))
-            if term is not None:
-                alternates[f"alternate_{i}_id"] = term.id
-                alternates[f"alternate_{i}_label"] = match.get("spoken_label", term.term)
-        return jsonify(
-            {
-                "status": "matched",
-                "term": _term_payload(top_term),
-                "confidence": top.get("confidence"),
-                "confirm_prompt": confirm_prompt,
-                "alternate_1_id": alternates.get("alternate_1_id"),
-                "alternate_1_label": alternates.get("alternate_1_label"),
-                "alternate_2_id": alternates.get("alternate_2_id"),
-                "alternate_2_label": alternates.get("alternate_2_label"),
-            }
-        )
+        return _matched_response(top, top_term, matches, terms_by_id)
+
+    # Second and final round: the caller has already answered one clarifying
+    # question, so asking again (or declining) is worse than committing to
+    # our best read and letting them correct it at the confirm step. Without
+    # this, any complaint still ambiguous on the retry fell through the
+    # flow's catch-all into a dead end -- a real caller saying "my shoulder
+    # has been aching for a couple of weeks" got told we couldn't help.
+    if final_attempt:
+        return _matched_response(top, top_term, matches, terms_by_id)
 
     # Hip-vs-spine ambiguity: vague "pain" often fits both -- ask a real
     # screening question instead of a weak "is it more like X or Y?".

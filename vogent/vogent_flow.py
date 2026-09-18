@@ -508,7 +508,10 @@ nodes = [
     ),
     function_node(
         "match_issue_retry_fn", "match-issue-retry-fn", "match_issue",
-        inputs={"complaint_text": "{{node.ask_complaint.answer}} {{node.ask_clarify.answer}}"},
+        inputs={
+            "complaint_text": "{{node.ask_complaint.answer}} {{node.ask_clarify.answer}}",
+            "final_attempt": "true",
+        },
         outputs=[
             out("status", "STRING"),
             out("term", "CUSTOM", nullable=True, custom_schema=TERM_SCHEMA),
@@ -648,19 +651,23 @@ nodes = [
     question_node(
         "present_more_slots", "present-more-slots",
         (
-            "The caller wants other time options beyond what was already offered "
-            "({{node.check_availability_fn.slots}}). Compare that against this fuller "
-            "list: {{node.offer_more_slots_fn.slots}}. If it contains any options not "
-            "already mentioned, read out only those new ones, phrased "
-            "conversationally, never a raw timestamp. If every option in the fuller "
-            "list was already mentioned (no new options exist), say so honestly -- "
-            "those are genuinely all the openings currently available with this "
-            "doctor -- and offer to have the office follow up if something opens."
+            "The caller asked for other time options beyond the ones already "
+            "offered ({{node.check_availability_fn.slots}}). Compare those against "
+            "this fuller list: {{node.offer_more_slots_fn.slots}}. If the fuller "
+            "list has options that were NOT already mentioned, read out only those "
+            "new ones, phrased conversationally, never a raw timestamp, and ask "
+            "which works. If every option was already mentioned, say honestly that "
+            "those are all the openings currently available with this doctor, then "
+            "re-read the original times and ask which of them works best -- the "
+            "caller only asked what else was available, they have NOT declined "
+            "these times, so never end the call here or apologize as though there "
+            "were nothing to offer."
         ),
         answer_guidelines=(
-            "If the caller CLEARLY picks one of the times, respond with the exact "
-            "slot_id integer of that slot. Otherwise (no more openings, or the "
-            "caller doesn't want any of them), respond with exactly NONE."
+            "If the caller picks one of the times (from either list), respond with "
+            "the exact slot_id integer of that slot. Respond with exactly NONE only "
+            "if the caller clearly does not want ANY of the times offered -- never "
+            "merely because there were no additional options."
         ),
         transitions=[
             equal("present_more_slots", "answer", "NONE", "dead_end_no_slots"),

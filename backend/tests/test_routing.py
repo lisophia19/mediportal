@@ -121,6 +121,64 @@ def test_match_issue_with_no_reason_given_asks_instead_of_guessing(client, db, a
     assert called["n"] == 0
 
 
+def test_match_issue_final_attempt_commits_instead_of_dead_ending(
+    client, db, agent_headers, monkeypatch
+):
+    """Regression test for a real dead-end: on the clarification retry the
+    flow has nowhere to send another needs_clarification, so an ambiguous
+    second answer fell through its catch-all and the caller was told we
+    couldn't help -- for "my shoulder has been aching for a couple of
+    weeks", a perfectly bookable complaint. With final_attempt the retry
+    commits to the best candidate and confirms it instead."""
+    shoulder = _make_term(db, term="Pain-Shoulder", body_part="Shoulder/UE")
+    arthritis = _make_term(db, term="Arthritis-Shoulder", body_part="Shoulder/UE")
+    db.commit()
+    payload = {
+        "ortho_relevant": True,
+        "matches": [
+            {"term_id": shoulder.id, "confidence": 0.45, "spoken_label": "shoulder pain"},
+            {"term_id": arthritis.id, "confidence": 0.40, "spoken_label": "shoulder arthritis"},
+        ],
+    }
+
+    _mock_llm(monkeypatch, payload)
+    ambiguous = client.post(
+        "/api/v1/routing/match-issue",
+        json={"complaint_text": "my shoulder aches", "call_id": "vg_fa1"},
+        headers=agent_headers,
+    ).get_json()
+    assert ambiguous["status"] == "needs_clarification"  # first round still asks
+
+    _mock_llm(monkeypatch, payload)
+    final = client.post(
+        "/api/v1/routing/match-issue",
+        json={
+            "complaint_text": "my shoulder aches",
+            "call_id": "vg_fa2",
+            "final_attempt": "true",
+        },
+        headers=agent_headers,
+    ).get_json()
+    assert final["status"] == "matched"
+    assert final["term"]["id"] == shoulder.id
+    assert final["alternate_1_id"] == arthritis.id
+
+
+def test_match_issue_final_attempt_still_declines_non_ortho(client, db, agent_headers, monkeypatch):
+    """final_attempt commits to a best guess, but must not override an
+    honest "we don't treat that" -- ortho_relevant stays the gate."""
+    _make_term(db)
+    db.commit()
+    _mock_llm(monkeypatch, {"ortho_relevant": False, "matches": []})
+
+    resp = client.post(
+        "/api/v1/routing/match-issue",
+        json={"complaint_text": "I have a migraine", "call_id": "vg_fa3", "final_attempt": "true"},
+        headers=agent_headers,
+    )
+    assert resp.get_json()["status"] == "no_match"
+
+
 def test_candidate_terms_ignores_filler_word_overlap(client, db):
     """Regression test: "and" in the complaint's own filler text used to
     exact-match "and" inside the body_part "Foot and Ankle", giving every
