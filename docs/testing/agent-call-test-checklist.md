@@ -41,19 +41,39 @@ including the Vogent call id for cross-referencing in Vogent's own UI.
 
 ---
 
+## Run log — 2026-09-18
+
+Bugs this pass found and fixed (all deployed, all with regression tests):
+
+| # | Bug | Found by |
+|---|-----|----------|
+| 1 | Claude replied with only a thinking block, no text → 503 → call dropped with "something went wrong on our end". Latent in every matching call; the triage classifier's `max_tokens=10` made it near-certain there. | `other_doctor` |
+| 2 | A name correction sent the flow back through intake, re-creating the patient each pass — three rows for one person — and replaying every "one moment…" line. | `other_doctor` |
+| 3 | Clarification retry had nowhere to send a second `needs_clarification`, so "my shoulder has been aching" dead-ended. | `no_reason_given` |
+| 4 | "Any other times?" ended the call even though the caller never declined anything. | `more_slots` |
+| 5 | "A different doctor?" ended the call instead of falling back. | `other_doctor` |
+| 6 | Transcripts never stored — the account webhook delivers `dial.inbound` but never `dial.transcript`. Now pulled from Vogent's API instead. | webhook logging |
+
+Agent config changed: endpoint detection `SIMPLE` → `SEMANTIC` (was cutting
+callers off mid-sentence), utterance detector aligned to the reference agent.
+
+**Blocked:** the remaining scenarios could not be run — Vogent returns
+`500 "Your wallet is empty"` on every dial. Top up the Vogent account, then
+re-run the unchecked boxes below.
+
 ## Scenario checklist
 
 ### Core booking
 
-- [ ] **`standard_booking`** — clear complaint (wrist fracture), new patient.
+- [x] **`standard_booking`** *(passed 2026-09-18)* — clear complaint (wrist fracture), new patient.
       *Expect:* matched confidently, new patient created, doctor + slot
       offered, booking confirmed. `status = scheduled`, `appointment_id` set.
 
 ### Triage (hip vs. spine)
 
-- [ ] **`triage_hip`** — vague "pain", answers *stays in one spot*.
+- [x] **`triage_hip`** *(passed 2026-09-18)* — vague "pain", answers *stays in one spot*.
       *Expect:* screening question asked, routed to a **hip** specialist.
-- [ ] **`triage_spine`** — vague "pain", answers *shoots down my leg*.
+- [ ] **`triage_spine`** *(triage logic correct; call stalled to timeout — re-test)* — vague "pain", answers *shoots down my leg*.
       *Expect:* screening question asked, routed to a **spine** specialist.
 
 ### Clarification
@@ -61,16 +81,16 @@ including the Vogent call id for cross-referencing in Vogent's own UI.
 - [ ] **`needs_clarification`** — "my knee hurts", then names an injury.
       *Expect:* one clarifying question, then a confident match. Never a
       `no_match` decline.
-- [ ] **`no_reason_given`** — "I'd like an appointment" with no reason.
+- [x] **`no_reason_given`** *(passed 2026-09-18 after fix #3)* — "I'd like an appointment" with no reason.
       *Expect:* the agent asks what's bringing them in (deterministic, no
       LLM guess), then proceeds normally. Never a decline or hangup.
 
 ### Alternatives
 
-- [ ] **`more_slots`** — caller asks for other times.
+- [ ] **`more_slots`** *(fix deployed, re-test blocked on wallet)* — caller asks for other times.
       *Expect:* additional times offered, or an honest "those are all the
       openings" — never a silent repeat of the same list, never a hangup.
-- [ ] **`other_doctor`** — caller asks for a different doctor.
+- [ ] **`other_doctor`** *(fixes deployed, re-test blocked on wallet)* — caller asks for a different doctor.
       *Expect:* the next eligible doctor by distance, or an honest "that's
       the only doctor who treats this" — never the same doctor again.
 
