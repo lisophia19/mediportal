@@ -3,9 +3,19 @@
 # can check the resulting transcript/booking/dashboard data end-to-end
 # instead of testing by hand. Costs real per-minute usage; run scenarios
 # deliberately, not on every change.
+#
+# Each agent-to-agent call consumes TWO concurrent Vogent call slots (the
+# test-caller's outbound leg and mediportal-agent's inbound leg), so the
+# runner caps itself well under the workspace concurrency limit.
+#
+# Verification is DB-side, not from the id printed here: Vogent creates a
+# SEPARATE dial for the inbound (mediportal-agent) leg, and that inbound
+# dial id is what lands in calls.vogent_call_id. See
+# docs/testing/agent-call-test-checklist.md.
 import json
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -25,73 +35,197 @@ TEST_CALLER_AGENT_ID = json.load(
 TEST_CALLER_NUMBER_ID = "e4ec8217-d430-4306-b81a-991ac4c97b22"  # +13322203540
 MEDIPORTAL_NUMBER = "+17038808652"
 
+MAX_CONCURRENT_CALLS = 2  # 2 legs each, against a workspace limit of 5
+TERMINAL_STATUSES = {"completed", "failed", "canceled", "busy", "no-answer"}
+
+# Shared persona rules appended to every scenario so the test caller behaves
+# like a real patient rather than reciting the scenario text back.
+_PERSONA_SUFFIX = (
+    " Speak naturally and only answer what you're actually asked, one "
+    "question at a time -- never volunteer your whole story at once. If the "
+    "agent asks something this scenario doesn't cover, improvise something "
+    "reasonable and stay consistent for the rest of the call. When the call "
+    "reaches a natural end (booking confirmed, or the agent has clearly "
+    "declined or redirected you), say a brief goodbye and stop talking."
+)
+
 SCENARIOS = {
-    "triage": (
-        "You are a NEW patient calling because you have been having pain, but you "
-        "describe it only as 'pain' at first -- don't specify hip or back/spine "
-        "unless asked a direct follow-up screening question. If asked whether the "
-        "pain travels/shoots down your leg or stays in one spot, say it clearly "
-        "stays in one spot and does not travel anywhere -- you are describing a "
-        "hip problem. Your name is Alex Testcaller, date of birth March 3rd 1985, "
-        "phone 703-555-0199, ZIP 11566. Go through the full booking and confirm "
-        "the appointment when offered a slot."
-    ),
+    # --- core happy path -------------------------------------------------
     "standard_booking": (
-        "You are a NEW patient calling because you fell yesterday and think you "
-        "may have fractured your wrist -- clear, specific complaint from the "
-        "start. Your name is Jamie Testcaller, date of birth July 14th 1990, "
-        "phone 703-555-0142, ZIP 11530. Go through the full booking flow and "
-        "confirm the first appointment slot offered."
+        "You are a NEW patient. You fell yesterday and think you may have "
+        "fractured your wrist -- say that clearly when asked what's going "
+        "on. Name Jamie Testcaller, date of birth July 14th 1990, phone "
+        "703-555-0142, ZIP 11530. Accept the first appointment time offered "
+        "and complete the booking."
     ),
+    # --- triage (hip vs spine) -------------------------------------------
+    "triage_hip": (
+        "You are a NEW patient. When asked what's going on, say only that "
+        "you've been having a lot of pain and you're not sure what's "
+        "causing it -- do NOT name a body part unless asked directly. If "
+        "pressed for a location, say it's around your hip and lower back. "
+        "If asked whether the pain travels or shoots down into your leg, "
+        "say it clearly stays in one spot and does not travel. Name Pat "
+        "Testcaller, date of birth November 5th 1958, phone 703-555-0163, "
+        "ZIP 11566. Complete the booking."
+    ),
+    "triage_spine": (
+        "You are a NEW patient. When asked what's going on, say only that "
+        "you've been having a lot of pain and you're not sure what's "
+        "causing it -- do NOT name a body part unless asked directly. If "
+        "pressed for a location, say it's around your hip and lower back. "
+        "If asked whether the pain travels or shoots down into your leg, "
+        "say yes -- it shoots down your leg, especially when walking. Name "
+        "Dana Testcaller, date of birth March 22nd 1967, phone "
+        "703-555-0164, ZIP 11566. Complete the booking."
+    ),
+    # --- clarification / no-signal ---------------------------------------
+    "needs_clarification": (
+        "You are a NEW patient. When asked what's going on, say only 'my "
+        "knee hurts' and nothing more. If the agent asks whether it's more "
+        "like an injury or arthritis, say it started after you twisted it "
+        "playing tennis, so an injury. Name Alex Testcaller, date of birth "
+        "April 10th 1999, phone 703-555-0165, ZIP 11530. Complete the "
+        "booking."
+    ),
+    "no_reason_given": (
+        "You are a NEW patient. When asked what's going on, say ONLY 'I'd "
+        "like to schedule an appointment, please' -- give no medical reason "
+        "at all on that first answer. If the agent then asks what's "
+        "bringing you in, say your shoulder has been aching for a couple of "
+        "weeks. Name Sam Testcaller, date of birth January 30th 1975, phone "
+        "703-555-0166, ZIP 11530. Complete the booking."
+    ),
+    # --- alternatives ----------------------------------------------------
+    "more_slots": (
+        "You are a NEW patient with wrist pain after a fall last week. When "
+        "the agent offers you appointment times, do NOT pick one -- ask if "
+        "there are any other times available. If the agent offers more "
+        "times, pick one of those. If the agent says those are genuinely "
+        "all the openings, accept the earliest one. Name Riley Testcaller, "
+        "date of birth August 8th 1982, phone 703-555-0167, ZIP 11530."
+    ),
+    "other_doctor": (
+        "You are a NEW patient with knee pain that's been building for "
+        "months. When the agent names a doctor and offers times, ask "
+        "whether you could see a different doctor instead. Accept whatever "
+        "the agent then offers -- another doctor's times, or an honest "
+        "explanation that there isn't another option. Name Jordan "
+        "Testcaller, date of birth May 3rd 1970, phone 703-555-0168, ZIP "
+        "11566."
+    ),
+    # --- patient identity ------------------------------------------------
+    "returning_patient": (
+        "You are a RETURNING patient who has been seen at this practice "
+        "before. Your name is Maria Rodriguez, date of birth April 2nd "
+        "1991, phone 516-555-0142, ZIP 11563. You're calling because your "
+        "wrist is hurting again. Give your real details when asked -- the "
+        "practice should already have your record. Complete the booking."
+    ),
+    "ambiguous_patient": (
+        "You are a RETURNING patient. Your last name is Smith and your date "
+        "of birth is May 12th 1985. Your first name is John. There is "
+        "another patient with a very similar name and the same date of "
+        "birth, so if the agent reads back a record to confirm it's you, "
+        "listen carefully: confirm only if it says John Smith, and say no "
+        "if it says Jonathan Smith. You're calling about ankle pain. "
+        "Complete the booking if you can."
+    ),
+    # --- urgent ----------------------------------------------------------
+    "urgent_injury": (
+        "You are a NEW patient. You slipped on stairs about an hour ago and "
+        "you think you may have broken your ankle -- it's very swollen and "
+        "you can't put weight on it. Convey the urgency naturally. Name "
+        "Casey Testcaller, date of birth February 17th 1993, phone "
+        "703-555-0169, ZIP 11530. Take the soonest appointment offered."
+    ),
+    # --- dead ends -------------------------------------------------------
     "no_match": (
-        "You are a NEW patient calling this orthopedic practice about severe "
-        "recurring migraines and headaches -- a neurological issue, not an "
-        "orthopedic one. If the agent explains they don't treat that and offers "
-        "to redirect you elsewhere, accept that gracefully and end the call."
+        "You are a NEW patient calling this orthopedic practice about "
+        "severe recurring migraines and headaches -- a neurological issue, "
+        "not orthopedic. If the agent explains they don't treat that and "
+        "redirects you elsewhere, accept that gracefully and end the call."
     ),
+    # --- resilience ------------------------------------------------------
     "edge_cases": (
-        "You are a NEW patient calling about knee pain after a soccer injury. "
-        "Be a slightly difficult, realistic caller: hesitate and use filler words "
-        "('um', 'let me think'), give your date of birth in an unusual spoken "
-        "format (e.g. 'the ninth of September, nineteen ninety-two'), ask the "
-        "agent to repeat itself once, and mid-way through answering one question "
-        "change your mind and correct yourself. Eventually settle down and "
-        "complete the booking normally. Name: Morgan Testcaller, phone "
-        "703-555-0177, ZIP 11753."
+        "You are a NEW patient with knee pain after a soccer injury. Be a "
+        "realistic, slightly difficult caller: hesitate and use filler "
+        "words, give your date of birth in an unusual spoken format ('the "
+        "ninth of September, nineteen ninety-two'), ask the agent to repeat "
+        "itself once, and at one point start answering, pause mid-sentence, "
+        "then correct yourself. Eventually settle down and complete the "
+        "booking. Name Morgan Testcaller, phone 703-555-0177, ZIP 11753."
     ),
 }
 
 
 def place_call(scenario_name):
-    scenario_text = SCENARIOS[scenario_name]
     payload = {
         "callAgentId": TEST_CALLER_AGENT_ID,
         "toNumber": MEDIPORTAL_NUMBER,
         "fromNumberId": TEST_CALLER_NUMBER_ID,
-        "callAgentInput": {"scenario": scenario_text},
-        "timeoutMinutes": 5,
+        "callAgentInput": {"scenario": SCENARIOS[scenario_name] + _PERSONA_SUFFIX},
+        "timeoutMinutes": 6,
     }
     resp = requests.post(f"{VOGENT_API}/dials", headers=HEADERS, json=payload)
     resp.raise_for_status()
-    dial = resp.json()
-    dial_id = dial.get("id") or dial.get("dialId") or dial.get("dial_id")
-    print(f"[{scenario_name}] raw response: {dial}")
-    print(f"[{scenario_name}] dial started: {dial_id}")
-    return dial_id
+    # Vogent returns dialId (not id) -- the OUTBOUND leg only.
+    return resp.json()["dialId"]
+
+
+def dial_status(dial_id):
+    resp = requests.get(f"{VOGENT_API}/dials/{dial_id}", headers=HEADERS)
+    resp.raise_for_status()
+    return resp.json().get("status")
+
+
+def run_scenario(scenario_name, results, semaphore):
+    with semaphore:
+        try:
+            dial_id = place_call(scenario_name)
+        except Exception as exc:
+            results[scenario_name] = {"error": str(exc)}
+            print(f"[{scenario_name}] FAILED to place: {exc}", flush=True)
+            return
+        print(f"[{scenario_name}] started: {dial_id}", flush=True)
+
+        deadline = time.time() + 420
+        status = None
+        while time.time() < deadline:
+            time.sleep(8)
+            try:
+                status = dial_status(dial_id)
+            except Exception:
+                continue  # transient API error -- keep polling
+            if status in TERMINAL_STATUSES:
+                break
+        results[scenario_name] = {"dial_id": dial_id, "status": status}
+        print(f"[{scenario_name}] finished: {status} ({dial_id})", flush=True)
 
 
 if __name__ == "__main__":
     names = sys.argv[1:] or list(SCENARIOS)
     unknown = [n for n in names if n not in SCENARIOS]
     if unknown:
-        print(f"Unknown scenario(s): {unknown}. Choices: {list(SCENARIOS)}")
+        print(f"Unknown scenario(s): {unknown}\nChoices: {list(SCENARIOS)}")
         sys.exit(1)
 
-    dial_ids = {}
-    for name in names:
-        dial_ids[name] = place_call(name)
-        time.sleep(2)  # avoid hammering the API placing calls back-to-back
+    results = {}
+    semaphore = threading.Semaphore(MAX_CONCURRENT_CALLS)
+    threads = [
+        threading.Thread(target=run_scenario, args=(name, results, semaphore))
+        for name in names
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
 
-    print("\nDial IDs:")
-    for name, dial_id in dial_ids.items():
-        print(f"  {name}: {dial_id}")
+    print("\n=== Summary ===")
+    for name in names:
+        result = results.get(name, {})
+        print(f"  {name}: {result.get('status') or result.get('error')} {result.get('dial_id', '')}")
+    print(
+        "\nVerify results DB-side (the ids above are the OUTBOUND leg):\n"
+        "  see docs/testing/agent-call-test-checklist.md"
+    )
