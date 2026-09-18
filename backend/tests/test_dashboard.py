@@ -96,6 +96,7 @@ def test_calls_list_and_detail(client, db):
     detail_resp = client.get(f"/api/v1/calls/{call.id}", headers=headers)
     detail_body = detail_resp.get_json()
     assert detail_resp.status_code == 200
+    assert detail_body["vogent_call_id"] == "vg_dash_1"
     assert detail_body["patient"]["last_name"] == patient.last_name
     assert detail_body["matched_term"]["term"] == term.term
     assert detail_body["appointment"]["doctor"] == f"Dr. {doctor.first_name} {doctor.last_name}"

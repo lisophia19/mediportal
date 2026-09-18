@@ -27,6 +27,7 @@ export default function CallDetail() {
               {call.ended_at && ` · ended ${formatDateTime(call.ended_at)}`}
             </p>
             <p>Caller phone: {call.caller_phone || "—"}</p>
+            <p className="vogent-call-id">Vogent call ID: {call.vogent_call_id || "—"}</p>
           </div>
 
           <div className="section">

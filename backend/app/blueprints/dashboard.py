@@ -127,6 +127,7 @@ def get_call_detail(call_id):
     return jsonify(
         {
             "id": call.id,
+            "vogent_call_id": call.vogent_call_id,
             "status": call.status,
             "started_at": call.started_at.isoformat() if call.started_at else None,
             "ended_at": call.ended_at.isoformat() if call.ended_at else None,
