@@ -95,6 +95,19 @@ FUNCTIONS = [
         ),
     ),
     (
+        "update_patient_name",
+        "Apply a caller's correction to the name on their record, in place.",
+        "/patients/update-name",
+        _schema(
+            {
+                "full_name": {"type": "string", "description": "Corrected 'First Last'"},
+                "patient_id": {"type": "integer"},
+                "call_id": {"type": "string"},
+            },
+            ["full_name"],
+        ),
+    ),
+    (
         "match_issue",
         "Match the caller's free-text complaint to a clinical term (spec §5.1).",
         "/routing/match-issue",

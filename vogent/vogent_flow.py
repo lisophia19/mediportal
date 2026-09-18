@@ -330,13 +330,37 @@ nodes = [
             "right."
         ),
         answer_guidelines=(
-            "If the caller confirms everything is correct, respond with exactly YES. "
-            "If they say anything is wrong, respond with exactly NO."
+            "If the caller confirms everything is correct, respond with exactly "
+            "YES. If they correct how their NAME was heard or spelled, respond "
+            "with exactly NAME. For any other correction respond with exactly NO."
         ),
         transitions=[
             equal("confirm_details", "answer", "YES", "find_doctors_fn"),
-            always("ask_first_name"),
+            equal("confirm_details", "answer", "NAME", "correct_name"),
+            always("correct_name"),
         ],
+    ),
+    # A correction must NOT send the caller back through intake: doing that
+    # re-ran patient creation and produced duplicate records, replayed every
+    # "one moment while I look up your information" line, and stretched a
+    # two-minute call past three. Fix the name in place and carry on.
+    question_node(
+        "correct_name", "correct-name",
+        (
+            "Apologize briefly for getting that wrong and ask the caller to say "
+            "their first and last name once more, slowly."
+        ),
+        answer_guidelines=(
+            "Respond with just the corrected full name as 'First Last', spelled the "
+            "way the caller gave it, and nothing else."
+        ),
+        transitions=[always("save_corrected_name")],
+    ),
+    function_node(
+        "save_corrected_name", "save-corrected-name", "update_patient_name",
+        inputs={"full_name": "{{node.correct_name.answer}}"},
+        outputs=[out("status", "STRING")],
+        transitions=[always("find_doctors_fn")],
     ),
     question_node(
         "ask_complaint", "ask-complaint",
@@ -754,7 +778,7 @@ nodes = [
         ],
         transitions=[
             equal("find_next_doctor_fn", "status", "matched", "check_next_doctor_availability_fn"),
-            equal("find_next_doctor_fn", "status", "no_eligible_doctor", "dead_end_no_doctor_2"),
+            equal("find_next_doctor_fn", "status", "no_eligible_doctor", "no_other_doctor"),
             always("dead_end_system_error"),
         ],
     ),
@@ -773,7 +797,7 @@ nodes = [
         started_message="Let me check with {{node.find_next_doctor_fn.best_doctor_spoken_label}} instead.",
         transitions=[
             equal("check_next_doctor_availability_fn", "status", "slots_available", "present_next_doctor_slots"),
-            equal("check_next_doctor_availability_fn", "status", "no_slots", "dead_end_no_slots"),
+            equal("check_next_doctor_availability_fn", "status", "no_slots", "no_other_doctor"),
             always("dead_end_system_error"),
         ],
     ),
@@ -839,9 +863,27 @@ nodes = [
             "there is nothing else, thank them and say <|hangup|>."
         ),
     ),
-    freeform_node(
-        "dead_end_no_doctor_2", "dead-end-no-doctor-2",
-        "Say exactly: {{node.find_next_doctor_fn.spoken_response}} Then say <|hangup|>.",
+    # Asking for a different doctor must never end the call: the caller
+    # never declined the original times, they only asked what else existed.
+    question_node(
+        "no_other_doctor", "no-other-doctor",
+        (
+            "Let the caller know honestly that there isn't another doctor "
+            "available for this -- either no one else here treats it, or the "
+            "others have nothing open right now. Then re-read "
+            "{{node.find_doctors_fn.best_doctor_name}}'s times "
+            "({{node.check_availability_fn.slots}}) conversationally, never a raw "
+            "timestamp, and ask whether one of those would work after all."
+        ),
+        answer_guidelines=(
+            "If the caller picks one of the times, respond with the exact slot_id "
+            "integer of that slot. If they decline them all, respond with exactly "
+            "NONE."
+        ),
+        transitions=[
+            equal("no_other_doctor", "answer", "NONE", "dead_end_no_slots"),
+            always("book_appointment_fn"),
+        ],
     ),
     function_node(
         "book_appointment_fn", "book-appointment-fn", "book_appointment",

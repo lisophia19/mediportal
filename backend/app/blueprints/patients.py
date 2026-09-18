@@ -132,6 +132,16 @@ def create_patient():
     if dob is None:
         return jsonify({"error": "date_of_birth must be YYYY-MM-DD"}), 400
 
+    # Idempotent on phone digits + DOB. A caller correcting one detail sends
+    # the flow back through intake, which called this again and created a
+    # second record for the same person -- real calls produced three
+    # near-identical rows differing only in how the name was transcribed
+    # ("Testcaller" / "Tess Coller" / "test collar"), so name is not a
+    # reliable key here but the number they just gave is.
+    existing = _find_by_phone_and_dob(phone, dob)
+    if existing is not None:
+        return jsonify({"status": "created", "patient": serialize_patient(existing)}), 200
+
     patient = Patient(
         first_name=first_name,
         last_name=last_name,
@@ -142,6 +152,56 @@ def create_patient():
     db.session.add(patient)
     db.session.commit()
     return jsonify({"status": "created", "patient": serialize_patient(patient)}), 201
+
+
+def _find_by_phone_and_dob(phone, dob):
+    digits = _phone_digits(phone)
+    if not digits:
+        return None
+    for candidate in Patient.query.filter(Patient.date_of_birth == dob).all():
+        if _phone_digits(candidate.phone) == digits:
+            return candidate
+    return None
+
+
+def _phone_digits(value):
+    return "".join(ch for ch in (value or "") if ch.isdigit())
+
+
+@patients_bp.post("/update-name")
+@require_agent_key
+def update_patient_name():
+    """Applies a caller's correction to the name already on the record, so
+    a misheard spelling doesn't have to send the whole intake back to the
+    start (which used to duplicate the patient)."""
+    payload = get_agent_json()
+    first_name = (payload.get("first_name") or "").strip()
+    last_name = (payload.get("last_name") or "").strip()
+    # The flow sends one scalar ("First Last") -- Vogent can't pass two
+    # related values without asking two separate questions.
+    full_name = (payload.get("full_name") or "").strip()
+    if full_name and not (first_name or last_name):
+        parts = full_name.split()
+        first_name = parts[0]
+        last_name = " ".join(parts[1:])
+    patient_id = coerce_int(payload.get("patient_id"))
+    call_id = payload.get("call_id")
+
+    if not patient_id and call_id:
+        call = Call.query.filter_by(vogent_call_id=call_id).first()
+        patient_id = call.patient_id if call else None
+    if not patient_id or not (first_name or last_name):
+        return jsonify({"error": "patient_id (or call_id) and a name are required"}), 400
+
+    patient = db.session.get(Patient, patient_id)
+    if patient is None:
+        return jsonify({"error": "unknown patient_id"}), 400
+    if first_name:
+        patient.first_name = first_name
+    if last_name:
+        patient.last_name = last_name
+    db.session.commit()
+    return jsonify({"status": "ok", "patient": serialize_patient(patient)})
 
 
 @patients_bp.post("/update-zip")

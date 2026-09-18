@@ -236,3 +236,67 @@ def test_update_zip_requires_patient_and_zip(client, agent_headers):
         "/api/v1/patients/update-zip", headers=agent_headers, json={"zip": "10001"}
     )
     assert resp.status_code == 400
+
+
+def test_create_patient_is_idempotent_on_phone_and_dob(client, db, agent_headers):
+    """Regression test: a caller correcting one detail sent the flow back
+    through intake, which called create twice and left three near-identical
+    rows for one person. Name transcription varies call to call, so the
+    number they just gave plus DOB is the reliable key."""
+    first = client.post(
+        "/api/v1/patients",
+        headers=agent_headers,
+        json={
+            "first_name": "Jordan",
+            "last_name": "Testcaller",
+            "date_of_birth": "1970-05-03",
+            "phone": "703-555-0168",
+        },
+    ).get_json()
+
+    # Same person, same number typed differently, name misheard.
+    second = client.post(
+        "/api/v1/patients",
+        headers=agent_headers,
+        json={
+            "first_name": "Jordan",
+            "last_name": "Tess Koller",
+            "date_of_birth": "1970-05-03",
+            "phone": "7035550168",
+        },
+    ).get_json()
+
+    assert first["patient"]["id"] == second["patient"]["id"]
+    assert Patient.query.filter_by(date_of_birth=date(1970, 5, 3)).count() == 1
+
+
+def test_create_patient_still_separates_different_people(client, db, agent_headers):
+    """Same DOB but a different phone is a different person -- the seeded
+    John/Jonathan Smith pair share a birthday."""
+    client.post(
+        "/api/v1/patients",
+        headers=agent_headers,
+        json={"first_name": "John", "last_name": "Smith", "date_of_birth": "1985-05-12", "phone": "516-555-0101"},
+    )
+    client.post(
+        "/api/v1/patients",
+        headers=agent_headers,
+        json={"first_name": "Jonathan", "last_name": "Smith", "date_of_birth": "1985-05-12", "phone": "631-555-0177"},
+    )
+    assert Patient.query.filter_by(date_of_birth=date(1985, 5, 12)).count() == 2
+
+
+def test_update_patient_name_applies_correction_via_call_id(client, db, agent_headers):
+    patient = _make_patient(db, first_name="Jordan", last_name="Tess Koller")
+    call = _make_call(db, vogent_call_id="vg_name")
+    call.patient_id = patient.id
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/patients/update-name",
+        headers=agent_headers,
+        json={"call_id": "vg_name", "full_name": "Jordan Testcaller"},
+    )
+    assert resp.status_code == 200
+    updated = db.get(Patient, patient.id)
+    assert (updated.first_name, updated.last_name) == ("Jordan", "Testcaller")
