@@ -4,7 +4,7 @@
 # only exists once the call has ended).
 from datetime import datetime, timezone
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 
 from ..auth_utils import require_vogent_signature
 from ..extensions import db
@@ -22,6 +22,12 @@ def vogent_webhook():
     dial_id = payload.get("dial_id")
 
     call = Call.query.filter_by(vogent_call_id=dial_id).first() if dial_id else None
+    # warning-level so it surfaces under gunicorn's default log level while
+    # we confirm which events Vogent actually delivers.
+    current_app.logger.warning(
+        "vogent webhook event=%s dial_id=%s matched_call=%s keys=%s",
+        event, dial_id, call.id if call else None, sorted(payload.keys()),
+    )
     if call is None:
         # Unknown dial_id (e.g. a test dial never routed through our /calls
         # webhook) -- 200 anyway so Vogent doesn't disable the endpoint.
