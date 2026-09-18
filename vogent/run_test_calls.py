@@ -54,7 +54,7 @@ SCENARIOS = {
     "standard_booking": (
         "You are a NEW patient. You fell yesterday and think you may have "
         "fractured your wrist -- say that clearly when asked what's going "
-        "on. Name Jamie Testcaller, date of birth July 14th 1990, phone "
+        "on. Name Jamie Brennan, date of birth July 14th 1990, phone "
         "703-555-0142, ZIP 11530. Accept the first appointment time offered "
         "and complete the booking."
     ),
@@ -66,7 +66,7 @@ SCENARIOS = {
         "pressed for a location, say it's around your hip and lower back. "
         "If asked whether the pain travels or shoots down into your leg, "
         "say it clearly stays in one spot and does not travel. Name Pat "
-        "Testcaller, date of birth November 5th 1958, phone 703-555-0163, "
+        "Donnelly, date of birth November 5th 1958, phone 703-555-0163, "
         "ZIP 11566. Complete the booking."
     ),
     "triage_spine": (
@@ -76,7 +76,7 @@ SCENARIOS = {
         "pressed for a location, say it's around your hip and lower back. "
         "If asked whether the pain travels or shoots down into your leg, "
         "say yes -- it shoots down your leg, especially when walking. Name "
-        "Dana Testcaller, date of birth March 22nd 1967, phone "
+        "Dana Marsh, date of birth March 22nd 1967, phone "
         "703-555-0164, ZIP 11566. Complete the booking."
     ),
     # --- clarification / no-signal ---------------------------------------
@@ -84,7 +84,7 @@ SCENARIOS = {
         "You are a NEW patient. When asked what's going on, say only 'my "
         "knee hurts' and nothing more. If the agent asks whether it's more "
         "like an injury or arthritis, say it started after you twisted it "
-        "playing tennis, so an injury. Name Alex Testcaller, date of birth "
+        "playing tennis, so an injury. Name Alex Whitman, date of birth "
         "April 10th 1999, phone 703-555-0165, ZIP 11530. Complete the "
         "booking."
     ),
@@ -93,7 +93,7 @@ SCENARIOS = {
         "like to schedule an appointment, please' -- give no medical reason "
         "at all on that first answer. If the agent then asks what's "
         "bringing you in, say your shoulder has been aching for a couple of "
-        "weeks. Name Sam Testcaller, date of birth January 30th 1975, phone "
+        "weeks. Name Sam Ferris, date of birth January 30th 1975, phone "
         "703-555-0166, ZIP 11530. Complete the booking."
     ),
     # --- alternatives ----------------------------------------------------
@@ -102,7 +102,7 @@ SCENARIOS = {
         "the agent offers you appointment times, do NOT pick one -- ask if "
         "there are any other times available. If the agent offers more "
         "times, pick one of those. If the agent says those are genuinely "
-        "all the openings, accept the earliest one. Name Riley Testcaller, "
+        "all the openings, accept the earliest one. Name Riley Hoffman, "
         "date of birth August 8th 1982, phone 703-555-0167, ZIP 11530."
     ),
     "other_doctor": (
@@ -111,7 +111,7 @@ SCENARIOS = {
         "whether you could see a different doctor instead. Accept whatever "
         "the agent then offers -- another doctor's times, or an honest "
         "explanation that there isn't another option. Name Jordan "
-        "Testcaller, date of birth May 3rd 1970, phone 703-555-0168, ZIP "
+        "Vance, date of birth May 3rd 1970, phone 703-555-0168, ZIP "
         "11566."
     ),
     # --- patient identity ------------------------------------------------
@@ -136,7 +136,7 @@ SCENARIOS = {
         "You are a NEW patient. You slipped on stairs about an hour ago and "
         "you think you may have broken your ankle -- it's very swollen and "
         "you can't put weight on it. Convey the urgency naturally. Name "
-        "Casey Testcaller, date of birth February 17th 1993, phone "
+        "Casey Nolan, date of birth February 17th 1993, phone "
         "703-555-0169, ZIP 11530. Take the soonest appointment offered."
     ),
     # --- dead ends -------------------------------------------------------
@@ -154,7 +154,7 @@ SCENARIOS = {
         "ninth of September, nineteen ninety-two'), ask the agent to repeat "
         "itself once, and at one point start answering, pause mid-sentence, "
         "then correct yourself. Eventually settle down and complete the "
-        "booking. Name Morgan Testcaller, phone 703-555-0177, ZIP 11753."
+        "booking. Name Morgan Reid, phone 703-555-0177, ZIP 11753."
     ),
 }
 
