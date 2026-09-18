@@ -634,7 +634,7 @@ nodes = [
             "doctor_id": "{{node.find_doctors_fn.best_doctor_id}}",
             "practice_id": "{{node.find_doctors_fn.best_practice_id}}",
             "urgency": "{{node.find_doctors_fn.term_urgency}}",
-            "limit": 6,
+            "limit": "6",
         },
         outputs=[
             out("status", "STRING"),
@@ -734,7 +734,7 @@ nodes = [
         inputs={
             "date_of_birth": "{{node.ask_dob.answer}}",
             "zip": "{{node.ask_zip.answer}}",
-            "excluded_doctor_ids": ["{{node.find_doctors_fn.best_doctor_id}}"],
+            "excluded_doctor_id": "{{node.find_doctors_fn.best_doctor_id}}",
         },
         outputs=[
             out("status", "STRING"),

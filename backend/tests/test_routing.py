@@ -561,7 +561,7 @@ def test_find_doctors_excludes_already_tried_doctor(client, db, agent_headers):
             "date_of_birth": "1991-04-02",
             "zip": "11563",
             "call_id": "vg_exclude",
-            "excluded_doctor_ids": [doc_near.id],
+            "excluded_doctor_id": doc_near.id,
         },
         headers=agent_headers,
     )
@@ -584,7 +584,7 @@ def test_find_doctors_excluding_the_only_eligible_doctor_gives_honest_reason(cli
             "date_of_birth": "1991-04-02",
             "zip": "11566",
             "call_id": "vg_exclude_only",
-            "excluded_doctor_ids": [doctor.id],
+            "excluded_doctor_id": doctor.id,
         },
         headers=agent_headers,
     )

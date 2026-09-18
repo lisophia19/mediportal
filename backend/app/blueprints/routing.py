@@ -597,12 +597,14 @@ def find_doctors():
     caller_coords = _zip_coords(zip_value)
     age = _age_from_dob(dob)
 
-    # Doctors already tried this call (a prior best_doctor_id the caller
+    # Doctor already tried this call (a prior best_doctor_id the caller
     # explicitly asked to skip, or that had no slots) -- lets the flow ask
     # for "the next best doctor" instead of only ever trying the closest one.
-    excluded_doctor_ids = {
-        coerce_int(x) for x in (payload.get("excluded_doctor_ids") or []) if coerce_int(x) is not None
-    }
+    # Scalar, not a list: Vogent's function inputs are flat strings only, no
+    # arrays -- single-retry matches the convention used everywhere else in
+    # this flow (confirm_complaint_2, match_issue_retry_fn, etc).
+    excluded_doctor_id = coerce_int(payload.get("excluded_doctor_id"))
+    excluded_doctor_ids = {excluded_doctor_id} if excluded_doctor_id is not None else set()
 
     # Eager-load doctor -> doctor_practices -> practice to avoid N+1 queries.
     all_eligibility = (
