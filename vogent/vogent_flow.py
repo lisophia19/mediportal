@@ -685,16 +685,21 @@ nodes = [
             "re-read the original times and ask which of them works best -- the "
             "caller only asked what else was available, they have NOT declined "
             "these times, so never end the call here or apologize as though there "
-            "were nothing to offer."
+            "were nothing to offer. These times all belong to "
+            "{{node.find_doctors_fn.best_doctor_name}} -- that is the ONLY doctor "
+            "you may name here; never mention any other doctor or office."
         ),
         answer_guidelines=(
             "If the caller picks one of the times (from either list), respond with "
-            "the exact slot_id integer of that slot. Respond with exactly NONE only "
-            "if the caller clearly does not want ANY of the times offered -- never "
-            "merely because there were no additional options."
+            "the exact slot_id integer of that slot. If they ask for a different "
+            "DOCTOR or provider rather than a different time, respond with exactly "
+            "OTHER_DOCTOR. Respond with exactly NONE only if the caller clearly "
+            "does not want ANY of the times offered -- never merely because there "
+            "were no additional options."
         ),
         transitions=[
             equal("present_more_slots", "answer", "NONE", "dead_end_no_slots"),
+            equal("present_more_slots", "answer", "OTHER_DOCTOR", "find_next_doctor_fn"),
             always("book_more_appointment_fn"),
         ],
     ),
