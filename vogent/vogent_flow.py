@@ -682,8 +682,18 @@ nodes = [
         "Say exactly: {{node.match_issue_fn.spoken_response}} Then say <|hangup|>.",
     ),
     freeform_node(
+        # Reached for every non-matched retry outcome (no_match,
+        # needs_clarification, needs_triage, error) -- match_issue_retry_fn
+        # only populates spoken_response for no_match/error, so referencing
+        # it directly here would speak an unresolved template variable
+        # literally for the other statuses. A static message is always
+        # safe regardless of which status actually came back.
         "dead_end_no_match_clarified", "dead-end-no-match-clarified",
-        "Say exactly: {{node.match_issue_retry_fn.spoken_response}} Then say <|hangup|>.",
+        (
+            "Say exactly: I'm sorry, I'm still having trouble pinning down what's "
+            "going on -- let me have someone from our office call you back to help "
+            "sort this out. Then say <|hangup|>."
+        ),
     ),
     freeform_node(
         "dead_end_no_doctor", "dead-end-no-doctor",
