@@ -9,3 +9,9 @@ __pycache__/
 node_modules/
 frontend/dist/
 deploy/*.pem
+
+#Example call scripts
+*-script.md
+# Client-facing demo artifacts (regenerate from deliverables/call-report.html)
+deliverables/*.mp3
+deliverables/*.pdf

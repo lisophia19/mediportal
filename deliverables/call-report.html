@@ -1,0 +1,193 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @page { size: Letter; margin: 0.6in 0.7in; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
+    color: #2b2d33;
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 3px solid #6C7FE0;
+    padding-bottom: 14px;
+    margin-bottom: 22px;
+  }
+  .header img { height: 42px; }
+  .header .doc-title { text-align: right; }
+  .header .doc-title h1 {
+    font-size: 17px;
+    margin: 0;
+    color: #2b2d33;
+  }
+  .header .doc-title .date {
+    font-size: 11px;
+    color: #8a8d99;
+    margin-top: 2px;
+  }
+  h2.section {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #6C7FE0;
+    border-bottom: 1px solid #e4e6ef;
+    padding-bottom: 5px;
+    margin: 22px 0 12px;
+  }
+  .summary-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px 28px;
+    background: #f6f7fc;
+    border: 1px solid #e4e6ef;
+    border-radius: 8px;
+    padding: 16px 20px;
+  }
+  .summary-grid .label {
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #8a8d99;
+    margin-bottom: 1px;
+  }
+  .summary-grid .value {
+    font-size: 13px;
+    color: #2b2d33;
+  }
+  .badge {
+    display: inline-block;
+    background: #e8ecfb;
+    color: #4a5bc9;
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 2px 9px;
+    border-radius: 100px;
+    margin-top: 2px;
+  }
+  .transcript { margin-top: 6px; }
+  .turn { display: flex; margin-bottom: 9px; }
+  .turn .who {
+    flex: 0 0 78px;
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding-top: 8px;
+  }
+  .turn.ai .who { color: #4a5bc9; }
+  .turn.caller .who { color: #5a5a5a; }
+  .turn .bubble {
+    flex: 1;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 12.5px;
+  }
+  .turn.ai .bubble { background: #f0f2fc; }
+  .turn.caller .bubble { background: #f4f4f5; }
+  .footer {
+    margin-top: 28px;
+    padding-top: 12px;
+    border-top: 1px solid #e4e6ef;
+    font-size: 10px;
+    color: #9a9da8;
+    display: flex;
+    justify-content: space-between;
+  }
+</style>
+</head>
+<body>
+
+  <div class="header">
+    <img src="kyron-logo.png" alt="Kyron Medical">
+    <div class="doc-title">
+      <h1>Live Call Demo — Long Island Bone &amp; Joint</h1>
+      <div class="date">Recorded September 17, 2026 &middot; Real end-to-end phone call</div>
+    </div>
+  </div>
+
+  <h2 class="section">Call Summary</h2>
+  <div class="summary-grid">
+    <div>
+      <div class="label">Caller</div>
+      <div class="value">Linda Whitfield (new patient, demo persona)</div>
+    </div>
+    <div>
+      <div class="label">Outcome</div>
+      <div class="value"><span class="badge">Scheduled</span></div>
+    </div>
+    <div>
+      <div class="label">Reason for visit</div>
+      <div class="value">Right knee pain, swelling, and stiffness for several months</div>
+    </div>
+    <div>
+      <div class="label">Matched condition</div>
+      <div class="value">Osteoarthritis, Knee (auto-matched from free speech, 0.75 confidence)</div>
+    </div>
+    <div>
+      <div class="label">Routed to</div>
+      <div class="value">Dr. Michael Fracchia &mdash; Joint Reconstruction / Hip &amp; Knee</div>
+    </div>
+    <div>
+      <div class="label">Location</div>
+      <div class="value">Melville office (auto-selected by proximity to caller ZIP)</div>
+    </div>
+    <div>
+      <div class="label">Appointment booked</div>
+      <div class="value">Wednesday, September 23rd at 10:20 AM</div>
+    </div>
+    <div>
+      <div class="label">Call duration</div>
+      <div class="value">2 minutes 28 seconds, fully automated</div>
+    </div>
+  </div>
+
+  <h2 class="section">What this demonstrates</h2>
+  <div class="summary-grid" style="grid-template-columns: 1fr;">
+    <div class="value">
+      The caller never named a diagnosis, a doctor, or a location &mdash; only a plain-language
+      description of the problem. The agent independently matched the complaint to the right
+      clinical condition, found the correct specialist for that condition, ranked locations by
+      distance to the caller, checked live availability, and booked the appointment &mdash; all
+      in one uninterrupted call, with no human involved on our side.
+    </div>
+  </div>
+
+  <h2 class="section">Full Transcript</h2>
+  <div class="transcript">
+    <div class="turn ai"><div class="who">Agent</div><div class="bubble">Thanks for calling! Welcome to Long Island Bone and Joint &mdash; what can we help you with today?</div></div>
+    <div class="turn caller"><div class="who">Caller</div><div class="bubble">Hi. My right knee has been bothering me for a few months now. It's swollen and kind of stiff, especially in the mornings after I've been sitting for a little while.</div></div>
+    <div class="turn ai"><div class="who">Agent</div><div class="bubble">I'm sorry to hear that &mdash; we'll help you with the right knee pain, swelling, and stiffness. It sounds like this is possible knee arthritis &mdash; is that right?</div></div>
+    <div class="turn caller"><div class="who">Caller</div><div class="bubble">Yeah. I think it might be.</div></div>
+    <div class="turn ai"><div class="who">Agent</div><div class="bubble">Great, let's get you booked in. Could I get your first name?</div></div>
+    <div class="turn caller"><div class="who">Caller</div><div class="bubble">Linda</div></div>
+    <div class="turn ai"><div class="who">Agent</div><div class="bubble">And your last name?</div></div>
+    <div class="turn caller"><div class="who">Caller</div><div class="bubble">Whitfield.</div></div>
+    <div class="turn ai"><div class="who">Agent</div><div class="bubble">And your date of birth?</div></div>
+    <div class="turn caller"><div class="who">Caller</div><div class="bubble">June twelfth 19 62.</div></div>
+    <div class="turn ai"><div class="who">Agent</div><div class="bubble">One moment while I look up your information. I don't see an existing record for you &mdash; let's get you set up. What's the best phone number for you?</div></div>
+    <div class="turn caller"><div class="who">Caller</div><div class="bubble">7 0 3 5 5 5 0 1 4 8.</div></div>
+    <div class="turn ai"><div class="who">Agent</div><div class="bubble">Great, one moment while I create your record. What's your ZIP code, or the town you're in?</div></div>
+    <div class="turn caller"><div class="who">Caller</div><div class="bubble">1 1 5 6 6.</div></div>
+    <div class="turn ai"><div class="who">Agent</div><div class="bubble">Before continuing, let me read back what I have collected so far to make sure it's all correct: name Linda Whitfield, date of birth June 12th, 1962, location 11566, and the reason for the visit is that your right knee has been bothering you for a few months now, it's swollen and kind of stiff, especially in the mornings and after you've been sitting for a little while. Is all of that right?</div></div>
+    <div class="turn caller"><div class="who">Caller</div><div class="bubble">Yes.</div></div>
+    <div class="turn ai"><div class="who">Agent</div><div class="bubble">I found Dr. Michael Fracchia, one of our joint reconstruction / hip &amp; knee specialists, at our Melville office about 11.3 miles from you. Let me check their availability. I wasn't able to find anything within the next few days for this urgent issue, but here are the soonest openings I do have with Dr. Michael Fracchia: Wednesday, September 23rd at 10:00 AM, 10:20 AM, or 10:40 AM. Which of those would work best for you?</div></div>
+    <div class="turn caller"><div class="who">Caller</div><div class="bubble">10 20 AM.</div></div>
+    <div class="turn ai"><div class="who">Agent</div><div class="bubble">Great, let me get that booked for you. You're all set. I have you scheduled for a new patient consultation with Dr. Michael Fracchia at our Melville office on Wednesday, September 23rd at 10:20 AM. Is there anything else I can help you with today?</div></div>
+    <div class="turn caller"><div class="who">Caller</div><div class="bubble">Nope. That's it.</div></div>
+    <div class="turn ai"><div class="who">Agent</div><div class="bubble">Thank you, Linda. We'll see you then.</div></div>
+  </div>
+
+  <div class="footer">
+    <div>Kyron Medical &mdash; Long Island Bone &amp; Joint scheduling agent</div>
+    <div>Confidential demo material</div>
+  </div>
+
+</body>
+</html>
