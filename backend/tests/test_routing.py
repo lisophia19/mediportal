@@ -22,6 +22,23 @@ from app.models import (
 )
 
 
+class _ThinkingOnlyMessages:
+    """A reply that is nothing but a thinking block -- real Anthropic
+    behaviour when the token budget is spent before any text is emitted."""
+
+    def __init__(self, payload):
+        self._payload = payload
+        self.calls = 0
+
+    def create(self, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            msg = _FakeMessage(json.dumps(self._payload))
+            msg.content = [type("Block", (), {"type": "thinking", "text": None})()]
+            return msg
+        return _FakeMessage(json.dumps(self._payload))
+
+
 class _FakeMessage:
     def __init__(self, text, with_thinking_block=False):
         blocks = []
@@ -68,6 +85,34 @@ def _make_term(db, **overrides):
     db.add(term)
     db.flush()
     return term
+
+
+def test_match_issue_retries_when_reply_is_thinking_only(client, db, agent_headers, monkeypatch):
+    """Regression test for a real dropped call: Claude returned a reply
+    containing only a thinking block and no text, which raised and 503'd
+    the endpoint -- the caller heard "something went wrong on our end" and
+    the call ended. One retry recovers it."""
+    term = _make_term(db)
+    db.commit()
+    payload = {
+        "ortho_relevant": True,
+        "matches": [{"term_id": term.id, "confidence": 0.92, "spoken_label": "a wrist fracture"}],
+    }
+    messages = _ThinkingOnlyMessages(payload)
+    monkeypatch.setattr(
+        routing_module,
+        "_anthropic_client",
+        lambda: type("C", (), {"messages": messages})(),
+    )
+
+    resp = client.post(
+        "/api/v1/routing/match-issue",
+        json={"complaint_text": "I hurt my wrist", "call_id": "vg_think"},
+        headers=agent_headers,
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["status"] == "matched"
+    assert messages.calls == 2
 
 
 def test_candidate_terms_matches_whole_words_not_substrings(client, db):

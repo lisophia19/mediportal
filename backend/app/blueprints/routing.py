@@ -71,22 +71,17 @@ either way."""
 
 
 def _classify_hip_or_spine_answer(question, answer_text):
-    client = _anthropic_client()
-    response = client.messages.create(
-        model=ANTHROPIC_MODEL,
-        max_tokens=10,
-        messages=[
-            {
-                "role": "user",
-                "content": _TRIAGE_CLASSIFIER_PROMPT.format(question=question, answer=answer_text),
-            }
-        ],
-    )
-    text_block = next((block for block in response.content if block.type == "text"), None)
-    if text_block is None:
+    # The answer is one word, but the budget has to leave room for the model
+    # to think first -- too small a cap and the reply is a thinking block
+    # with no text, which reads as UNCLEAR and sends a perfectly clear
+    # caller down the retry path.
+    prompt = _TRIAGE_CLASSIFIER_PROMPT.format(question=question, answer=answer_text)
+    try:
+        verdict = _strip_markdown_fence(_claude_text(prompt, max_tokens=1000)).strip().upper()
+    except ValueError:
         return "UNCLEAR"
-    verdict = _strip_markdown_fence(text_block.text).strip().upper()
     return verdict if verdict in ("HIP", "SPINE") else "UNCLEAR"
+
 
 EARTH_RADIUS_MILES = 3958.8
 
@@ -222,18 +217,34 @@ def _classify_complaint(complaint_text, candidates):
         'phrase for this term, e.g. \'a possible wrist fracture\'>"}]}\n'
         "List at most 3 matches, best first. Empty matches array if ortho_relevant is false."
     )
+    return json.loads(_strip_markdown_fence(_claude_text(prompt, max_tokens=1500)))
+
+
+def _claude_text(prompt, max_tokens):
+    """Returns the text of a Claude reply, retrying once if the model spends
+    the whole budget thinking and emits no text block at all.
+
+    Both cases are real: content[0] is not reliably the text block (a
+    thinking block can precede it), and a reply can come back as *only* a
+    thinking block -- which used to raise and 503 the endpoint, dead-ending
+    a live call with "something went wrong on our end"."""
     client = _anthropic_client()
-    response = client.messages.create(
-        model=ANTHROPIC_MODEL,
-        max_tokens=500,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    # content[0] isn't reliably the text block (a thinking block can precede
-    # it) -- find it by type instead.
-    text_block = next((block for block in response.content if block.type == "text"), None)
-    if text_block is None:
-        raise ValueError(f"no text block in Anthropic response: {response.content!r}")
-    return json.loads(_strip_markdown_fence(text_block.text))
+    for attempt in range(2):
+        response = client.messages.create(
+            model=ANTHROPIC_MODEL,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        block = next(
+            (b for b in response.content if b.type == "text" and (b.text or "").strip()), None
+        )
+        if block is not None:
+            return block.text
+        current_app.logger.warning(
+            "Anthropic reply had no text block (attempt %s), stop_reason=%s",
+            attempt + 1, getattr(response, "stop_reason", None),
+        )
+    raise ValueError("no text block in Anthropic response after retry")
 
 
 def _strip_markdown_fence(text):
