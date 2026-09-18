@@ -146,6 +146,8 @@ def test_stale_in_progress_call_swept_to_abandoned_on_read(client, db):
 
     assert statuses_by_id[call.id] == "abandoned"
     assert statuses_by_id[fresh_call.id] == "in_progress"
+    # ended_at must be set too -- transcript backfill keys off it.
+    assert db.get(Call, call.id).ended_at is not None
 
 
 def test_finished_call_transcript_backfilled_from_vogent(client, db, monkeypatch):

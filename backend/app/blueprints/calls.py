@@ -21,9 +21,13 @@ def sweep_abandoned_calls():
     called lazily from dashboard.py's read routes instead, which is cheap
     enough at this data volume and means the dashboard is never more than
     one page-load stale."""
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=ABANDONED_AFTER_MINUTES)
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(minutes=ABANDONED_AFTER_MINUTES)
+    # ended_at is set alongside the status: the call really is over, and
+    # downstream work keys off ended_at (e.g. transcripts are only pulled
+    # from Vogent once a call has finished).
     Call.query.filter(Call.status == "in_progress", Call.started_at < cutoff).update(
-        {"status": "abandoned"}, synchronize_session=False
+        {"status": "abandoned", "ended_at": now}, synchronize_session=False
     )
     db.session.commit()
 
