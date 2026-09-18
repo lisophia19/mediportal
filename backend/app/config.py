@@ -27,6 +27,9 @@ class Config:
     # / dial.updated) -- set to match whatever's entered in Vogent's dashboard.
     VOGENT_WEBHOOK_SECRET = os.environ.get("VOGENT_WEBHOOK_SECRET", "dev-webhook-secret")
 
+    # Read-only Vogent API access, used to pull finished call transcripts.
+    VOGENT_API_KEY = os.environ.get("VOGENT_API_KEY")
+
     # Selects the SchedulingProvider implementation registered in create_app.
     # "postgres" is the only implementation built so far (Phase 1).
     SCHEDULING_PROVIDER = os.environ.get("SCHEDULING_PROVIDER", "postgres")

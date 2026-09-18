@@ -9,6 +9,7 @@ from ..blueprints.calls import sweep_abandoned_calls
 from ..extensions import db
 from ..format_utils import format_doctor_name, serialize_patient
 from ..models import Appointment, AppointmentSlot, Call, Doctor, Patient, Practice, Term
+from ..vogent_client import fetch_transcript
 
 dashboard_bp = Blueprint("dashboard", __name__, url_prefix="/api/v1")
 
@@ -76,6 +77,20 @@ def _call_summaries(calls):
     return summaries
 
 
+def _backfill_transcript(call):
+    """Pulls the transcript from Vogent the first time a finished call is
+    opened, then stores it. Only for calls that have actually ended -- a
+    live call's transcript is still growing, and caching a partial one
+    would freeze it half-written."""
+    if call.transcript or call.ended_at is None:
+        return
+    turns = fetch_transcript(call.vogent_call_id)
+    if not turns:
+        return
+    call.transcript = turns
+    db.session.commit()
+
+
 @dashboard_bp.get("/calls")
 @require_jwt
 def list_calls():
@@ -119,6 +134,8 @@ def get_call_detail(call_id):
     call = db.session.get(Call, call_id)
     if not call:
         return jsonify({"error": "not found"}), 404
+
+    _backfill_transcript(call)
 
     patient = db.session.get(Patient, call.patient_id) if call.patient_id else None
     term = db.session.get(Term, call.matched_term_id) if call.matched_term_id else None

@@ -146,3 +146,64 @@ def test_stale_in_progress_call_swept_to_abandoned_on_read(client, db):
 
     assert statuses_by_id[call.id] == "abandoned"
     assert statuses_by_id[fresh_call.id] == "in_progress"
+
+
+def test_finished_call_transcript_backfilled_from_vogent(client, db, monkeypatch):
+    """The account-level webhook never delivered dial.transcript to this
+    deployment, so transcripts are pulled from Vogent's API the first time
+    a finished call is opened (and cached)."""
+    from app.blueprints import dashboard as dashboard_module
+
+    make_user(db)
+    token = _login(client).get_json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    call = Call(
+        vogent_call_id="vg_backfill",
+        status="scheduled",
+        started_at=datetime.now(timezone.utc),
+        ended_at=datetime.now(timezone.utc),
+        transcript=[],
+    )
+    db.add(call)
+    db.flush()
+
+    monkeypatch.setattr(
+        dashboard_module,
+        "fetch_transcript",
+        lambda _id: [{"speaker": "AI", "text": "hello"}],
+    )
+
+    body = client.get(f"/api/v1/calls/{call.id}", headers=headers).get_json()
+    assert body["transcript"] == [{"speaker": "AI", "text": "hello"}]
+
+
+def test_live_call_transcript_not_backfilled(client, db, monkeypatch):
+    """A call still in progress must not have a half-written transcript
+    cached -- it would freeze mid-conversation and never update."""
+    from app.blueprints import dashboard as dashboard_module
+
+    make_user(db)
+    token = _login(client).get_json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    call = Call(
+        vogent_call_id="vg_live",
+        status="in_progress",
+        started_at=datetime.now(timezone.utc),
+        ended_at=None,
+        transcript=[],
+    )
+    db.add(call)
+    db.flush()
+
+    called = {"n": 0}
+
+    def _spy(_id):
+        called["n"] += 1
+        return [{"speaker": "AI", "text": "partial"}]
+
+    monkeypatch.setattr(dashboard_module, "fetch_transcript", _spy)
+
+    client.get(f"/api/v1/calls/{call.id}", headers=headers)
+    assert called["n"] == 0
