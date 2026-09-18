@@ -127,8 +127,8 @@ re-run the unchecked boxes below.
 - [ ] Nothing internal is ever spoken aloud — no ids, statuses, raw
       timestamps, JSON, or unresolved `{{template}}` variables.
 - [ ] The agent never hangs up on an answer it merely failed to parse.
-- [ ] `calls.transcript` is populated (via the account-level Vogent webhook
-      → `POST /webhooks/vogent`).
+- [ ] `calls.transcript` is populated — pulled from Vogent's API the first
+      time a finished call is opened in the dashboard.
 - [ ] Booked calls carry `appointment_id`; the dashboard shows the
       appointment rather than "No appointment booked".
 - [ ] `patients.home_zip` is saved for new patients.

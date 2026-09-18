@@ -22,9 +22,7 @@ def vogent_webhook():
     dial_id = payload.get("dial_id")
 
     call = Call.query.filter_by(vogent_call_id=dial_id).first() if dial_id else None
-    # warning-level so it surfaces under gunicorn's default log level while
-    # we confirm which events Vogent actually delivers.
-    current_app.logger.warning(
+    current_app.logger.info(
         "vogent webhook event=%s dial_id=%s matched_call=%s keys=%s",
         event, dial_id, call.id if call else None, sorted(payload.keys()),
     )
