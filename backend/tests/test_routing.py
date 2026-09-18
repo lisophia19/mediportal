@@ -95,6 +95,32 @@ def test_candidate_terms_matches_whole_words_not_substrings(client, db):
     assert hand_deformity.id not in candidate_ids
 
 
+def test_match_issue_with_no_reason_given_asks_instead_of_guessing(client, db, agent_headers, monkeypatch):
+    """Regression test for real production nondeterminism: "I'd like to
+    schedule an appointment, please" carries zero clinical signal, so
+    sending it into the LLM classifier produced three different outcomes
+    (no_match, needs_clarification, and an outright parse error) across
+    three identical real calls. Detect the no-signal case deterministically
+    and just ask, without ever calling the LLM."""
+    called = {"n": 0}
+
+    def _boom(*args, **kwargs):
+        called["n"] += 1
+        raise AssertionError("LLM should never be called for a content-free complaint")
+
+    monkeypatch.setattr(routing_module, "_classify_complaint", _boom)
+
+    resp = client.post(
+        "/api/v1/routing/match-issue",
+        json={"complaint_text": "I'd like to schedule an appointment, please.", "call_id": "vg_noreason"},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert body["status"] == "needs_clarification"
+    assert called["n"] == 0
+
+
 def test_candidate_terms_ignores_filler_word_overlap(client, db):
     """Regression test: "and" in the complaint's own filler text used to
     exact-match "and" inside the body_part "Foot and Ankle", giving every
@@ -508,6 +534,63 @@ def test_find_doctors_matched_ranks_by_distance(client, db, agent_headers):
     assert body["best_practice_id"] == near.id
     assert body["best_doctor_spoken_label"] == body["doctors"][0]["spoken_label"]
     assert body["best_doctor_name"] == body["doctors"][0]["name"]
+
+
+def test_find_doctors_excludes_already_tried_doctor(client, db, agent_headers):
+    """A caller who's told the closest doctor has no slots (or explicitly
+    asks for someone else) should get the NEXT-best eligible doctor, not
+    the same one again or a dead end -- real feedback: the agent almost
+    always routed to the same doctor with no fallback."""
+    term = _make_term(db)
+    caller_zip = ZipCentroid(zip="11563", latitude=40.6551, longitude=-73.6768, label="Lynbrook")
+    db.add(caller_zip)
+
+    near = _make_practice(db, "Merrick", "11566", lat=40.6668, lon=-73.5502)
+    far = _make_practice(db, "Port Jefferson", "11777", lat=40.9462, lon=-73.0704)
+
+    doc_far = _make_doctor(db, "Bennett", "Brown", "Hand & Wrist", far)
+    doc_near = _make_doctor(db, "Alice", "Chen", "Hand & Wrist", near)
+    db.add(TermEligibility(term_id=term.id, doctor_id=doc_far.id, min_age=1, max_age=100))
+    db.add(TermEligibility(term_id=term.id, doctor_id=doc_near.id, min_age=1, max_age=100))
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/routing/find-doctors",
+        json={
+            "term_id": term.id,
+            "date_of_birth": "1991-04-02",
+            "zip": "11563",
+            "call_id": "vg_exclude",
+            "excluded_doctor_ids": [doc_near.id],
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched"
+    assert body["best_doctor_id"] == doc_far.id
+
+
+def test_find_doctors_excluding_the_only_eligible_doctor_gives_honest_reason(client, db, agent_headers):
+    term = _make_term(db)
+    practice = _make_practice(db, "Merrick", "11566", lat=40.6668, lon=-73.5502)
+    doctor = _make_doctor(db, "Alice", "Chen", "Hand & Wrist", practice)
+    db.add(TermEligibility(term_id=term.id, doctor_id=doctor.id, min_age=1, max_age=100))
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/routing/find-doctors",
+        json={
+            "term_id": term.id,
+            "date_of_birth": "1991-04-02",
+            "zip": "11566",
+            "call_id": "vg_exclude_only",
+            "excluded_doctor_ids": [doctor.id],
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "no_eligible_doctor"
+    assert body["reason"] == "no_more_doctors"
 
 
 def test_find_doctors_falls_back_to_term_id_recorded_on_call(client, db, agent_headers):

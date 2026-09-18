@@ -116,6 +116,11 @@ FUNCTIONS = [
                 "date_of_birth": {"type": "string", "description": "YYYY-MM-DD"},
                 "zip": {"type": "string", "description": "Caller's ZIP for proximity ranking"},
                 "call_id": {"type": "string"},
+                "excluded_doctor_ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "Doctor IDs already tried this call (no slots, or caller asked for someone else)",
+                },
             },
             ["term_id", "date_of_birth"],
         ),

@@ -122,7 +122,24 @@ _STOPWORDS = {
     "when", "where", "that", "this", "these", "those", "kind", "sort",
     "little", "bit", "few", "some", "any", "all", "very", "more", "most",
     "now", "ago", "since", "still", "also", "like", "about", "than",
+    "please", "i'd", "i'm", "i've", "i'll",
 }
+
+# Words that only describe the act of scheduling, never a reason for the
+# visit -- "I'd like to schedule an appointment, please" strips to nothing
+# once these and _STOPWORDS are removed. Sending a complaint with zero real
+# signal into the LLM classifier is what produced no_match, needs_clarification,
+# and an outright parse error for the identical input across three real calls
+# -- there's nothing to classify. Detect that up front and just ask, the way
+# a real front-desk person would, instead of guessing.
+_SCHEDULING_ONLY_WORDS = {
+    "schedule", "scheduling", "appointment", "appointments", "want",
+    "wanted", "would", "need", "needed", "see", "visit", "doctor",
+    "doctors", "book", "booking", "come", "make", "today", "someone",
+    "somebody", "office", "practice", "call", "calling",
+}
+
+NEEDS_REASON_PROMPT = "Sure! Could you tell me a bit about what's bringing you in today?"
 
 
 def _candidate_terms(complaint_text):
@@ -254,6 +271,16 @@ def match_issue():
     call_id = payload.get("call_id")
     if not complaint_text or not call_id:
         return jsonify({"error": "complaint_text and call_id are required"}), 400
+
+    signal_words = (
+        {w.strip(".,!?").lower() for w in complaint_text.split() if len(w) > 2}
+        - _STOPWORDS
+        - _SCHEDULING_ONLY_WORDS
+    )
+    if not signal_words:
+        return jsonify(
+            {"status": "needs_clarification", "candidates": [], "clarify_prompt": NEEDS_REASON_PROMPT}
+        )
 
     candidates = _candidate_terms(complaint_text)
     if not candidates:
@@ -516,6 +543,8 @@ def _directory_redirect_for(term):
 def _no_eligible_doctor_response(reason, term, caller_coords):
     if reason == "age_restricted":
         base = "Our doctors who treat that only see patients in a different age range than you."
+    elif reason == "no_more_doctors":
+        base = "That's actually the only doctor we have who treats that."
     else:
         base = "We don't have a doctor here who treats that."
 
@@ -568,6 +597,13 @@ def find_doctors():
     caller_coords = _zip_coords(zip_value)
     age = _age_from_dob(dob)
 
+    # Doctors already tried this call (a prior best_doctor_id the caller
+    # explicitly asked to skip, or that had no slots) -- lets the flow ask
+    # for "the next best doctor" instead of only ever trying the closest one.
+    excluded_doctor_ids = {
+        coerce_int(x) for x in (payload.get("excluded_doctor_ids") or []) if coerce_int(x) is not None
+    }
+
     # Eager-load doctor -> doctor_practices -> practice to avoid N+1 queries.
     all_eligibility = (
         TermEligibility.query.filter(
@@ -580,8 +616,11 @@ def find_doctors():
         )
         .all()
     )
+    had_any_eligibility = bool(all_eligibility)
+    all_eligibility = [e for e in all_eligibility if e.doctor_id not in excluded_doctor_ids]
     if not all_eligibility:
-        return _no_eligible_doctor_response("not_covered", term, caller_coords)
+        reason = "no_more_doctors" if had_any_eligibility and excluded_doctor_ids else "not_covered"
+        return _no_eligible_doctor_response(reason, term, caller_coords)
 
     age_eligible = [e for e in all_eligibility if e.min_age <= age <= e.max_age]
     if not age_eligible:
