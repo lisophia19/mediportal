@@ -391,7 +391,7 @@ nodes = [
             equal("match_issue_fn", "status", "matched", "confirm_complaint"),
             equal("match_issue_fn", "status", "needs_triage", "ask_triage_question"),
             equal("match_issue_fn", "status", "needs_clarification", "ask_clarify"),
-            equal("match_issue_fn", "status", "no_match", "dead_end_no_match_direct"),
+            equal("match_issue_fn", "status", "no_match", "log_no_match_fn"),
             always("dead_end_system_error"),
         ],
     ),
@@ -758,12 +758,56 @@ nodes = [
         answer_guidelines=(
             "If the caller is explicitly asking for a different doctor or provider "
             "(not just a different time with the same doctor), respond with exactly "
-            "OTHER_DOCTOR. Otherwise respond with exactly CONTINUE."
+            "OTHER_DOCTOR. If they now pick one of the times, respond with the "
+            "exact slot_id integer of that slot. If they decline every time "
+            "offered, respond with exactly NONE."
         ),
+        # Never routes back to present_slots: that cycle let one unresolved
+        # concern bounce between the two nodes indefinitely -- a real call
+        # produced nine consecutive "I'll check that before we lock it in"
+        # turns and never booked. One concern round, then a decision.
         transitions=[
             equal("address_concern", "answer", "OTHER_DOCTOR", "find_next_doctor_fn"),
-            always("present_slots"),
+            equal("address_concern", "answer", "NONE", "dead_end_no_slots"),
+            always("book_after_concern_fn"),
         ],
+    ),
+    function_node(
+        "book_after_concern_fn", "book-after-concern-fn", "book_appointment",
+        inputs={"slot_id": "{{node.address_concern.answer}}"},
+        outputs=[
+            out("status", "STRING"),
+            out("appointment_id", "INTEGER", nullable=True),
+            out("confirmation", "CUSTOM", nullable=True, custom_schema=CONFIRMATION_SCHEMA),
+        ],
+        started_message="Great, let me get that booked for you.",
+        transitions=[
+            equal("book_after_concern_fn", "status", "scheduled", "log_scheduled_after_concern_fn"),
+            equal("book_after_concern_fn", "status", "slot_taken", "dead_end_no_slots"),
+            always("dead_end_system_error"),
+        ],
+    ),
+    function_node(
+        "log_scheduled_after_concern_fn", "log-scheduled-after-concern-fn", "complete_call",
+        inputs={
+            "status": "scheduled",
+            "appointment_id": "{{node.book_after_concern_fn.appointment_id}}",
+        },
+        outputs=[out("status", "STRING")],
+        transitions=[always("confirm_booking_after_concern")],
+    ),
+    freeform_node(
+        "confirm_booking_after_concern", "confirm-booking-after-concern",
+        (
+            "Confirm the booking to the caller: "
+            "{{node.book_after_concern_fn.confirmation.doctor}} at "
+            "{{node.book_after_concern_fn.confirmation.practice}}, "
+            "{{node.book_after_concern_fn.confirmation.when}}, a "
+            "{{node.book_after_concern_fn.confirmation.appointment_type}} "
+            "appointment. Read it back naturally and clearly. Then ask if there is "
+            "anything else you can help with. Wait for their response. Once they "
+            "say there is nothing else, thank them and say <|hangup|>."
+        ),
     ),
     function_node(
         "find_next_doctor_fn", "find-next-doctor-fn", "find_doctors",
@@ -971,6 +1015,14 @@ nodes = [
             "you can help with. Wait for their response. Once they say there is "
             "nothing else, thank them and say <|hangup|>."
         ),
+    ),
+    function_node(
+        # Without this the dashboard showed a cleanly-declined call as
+        # "in_progress" until the 15-minute abandoned sweep mislabelled it.
+        "log_no_match_fn", "log-no-match-fn", "complete_call",
+        inputs={"status": "no_match"},
+        outputs=[out("status", "STRING")],
+        transitions=[always("dead_end_no_match_direct")],
     ),
     freeform_node(
         "dead_end_no_match_direct", "dead-end-no-match-direct",
