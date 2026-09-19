@@ -53,13 +53,17 @@ Bugs this pass found and fixed (all deployed, all with regression tests):
 | 4 | "Any other times?" ended the call even though the caller never declined anything. | `more_slots` |
 | 5 | "A different doctor?" ended the call instead of falling back. | `other_doctor` |
 | 6 | Transcripts never stored — the account webhook delivers `dial.inbound` but never `dial.transcript`. Now pulled from Vogent's API instead. | webhook logging |
+| 7 | **`find_doctors` returned the doctor's *closest* office, but their open slots were at another one.** `get_availability` hard-filtered on it and reported `no_slots` for a doctor with 30 open slots — the caller was told nothing was available, then that no other doctor could help. `practice_id` is now a preference with fallback. | `triage_spine`, `returning_patient` |
+| 8 | `no_other_doctor` re-read a slot list that was empty on the no-slots path — the agent stalled for minutes repeating "I'm not seeing the exact times in front of me". | `triage_spine` |
+| 9 | That node's booking fallback used `{{node.present_slots.answer}}`, a node that never ran on that path; Vogent sent the literal template string, the API 500'd and the call died. Books from its own answer now. | `triage_spine` |
+| 10 | `address_concern` routed back to `present_slots`, so one unresolved concern bounced between them — nine consecutive "I'll check that before we lock it in" turns, never booked. | `returning_patient` |
+| 11 | Dead ends never recorded a terminal status, so a cleanly-declined call showed as `in_progress` until the sweep mislabelled it `abandoned`. | `no_match` |
 
 Agent config changed: endpoint detection `SIMPLE` → `SEMANTIC` (was cutting
 callers off mid-sentence), utterance detector aligned to the reference agent.
 
-**Blocked:** the remaining scenarios could not be run — Vogent returns
-`500 "Your wallet is empty"` on every dial. Top up the Vogent account, then
-re-run the unchecked boxes below.
+**All 12 scenarios pass** as of 2026-09-19. Re-run after any flow or
+routing change.
 
 ## Scenario checklist
 
@@ -73,12 +77,12 @@ re-run the unchecked boxes below.
 
 - [x] **`triage_hip`** *(passed 2026-09-18)* — vague "pain", answers *stays in one spot*.
       *Expect:* screening question asked, routed to a **hip** specialist.
-- [ ] **`triage_spine`** *(triage logic correct; call stalled to timeout — re-test)* — vague "pain", answers *shoots down my leg*.
+- [x] **`triage_spine`** *(passed 2026-09-19 after fix #7)* — vague "pain", answers *shoots down my leg*.
       *Expect:* screening question asked, routed to a **spine** specialist.
 
 ### Clarification
 
-- [ ] **`needs_clarification`** — "my knee hurts", then names an injury.
+- [x] **`needs_clarification`** *(passed 2026-09-19)* — "my knee hurts", then names an injury.
       *Expect:* one clarifying question, then a confident match. Never a
       `no_match` decline.
 - [x] **`no_reason_given`** *(passed 2026-09-18 after fix #3)* — "I'd like an appointment" with no reason.
@@ -87,35 +91,35 @@ re-run the unchecked boxes below.
 
 ### Alternatives
 
-- [ ] **`more_slots`** *(fix deployed, re-test blocked on wallet)* — caller asks for other times.
+- [x] **`more_slots`** *(passed 2026-09-19)* — caller asks for other times.
       *Expect:* additional times offered, or an honest "those are all the
       openings" — never a silent repeat of the same list, never a hangup.
-- [ ] **`other_doctor`** *(fixes deployed, re-test blocked on wallet)* — caller asks for a different doctor.
+- [x] **`other_doctor`** *(passed 2026-09-19 after fix #7)* — caller asks for a different doctor.
       *Expect:* the next eligible doctor by distance, or an honest "that's
       the only doctor who treats this" — never the same doctor again.
 
 ### Patient identity
 
-- [ ] **`returning_patient`** — Maria Rodriguez, already in the database.
+- [x] **`returning_patient`** *(passed 2026-09-19 after fix #10; existing record reused, no duplicate)* — Maria Rodriguez, already in the database.
       *Expect:* existing record found, no duplicate patient created.
-- [ ] **`ambiguous_patient`** — John Smith vs. Jonathan Smith, same DOB.
+- [x] **`ambiguous_patient`** *(passed 2026-09-19; correctly chose John over Jonathan)* — John Smith vs. Jonathan Smith, same DOB.
       *Expect:* confirm-by-readback; caller rejects the wrong record and
       the right one is used (or an honest callback offer).
 
 ### Urgency
 
-- [ ] **`urgent_injury`** — acute ankle fracture, one hour ago.
+- [x] **`urgent_injury`** *(passed 2026-09-19 after fix #7)* — acute ankle fracture, one hour ago.
       *Expect:* urgent term matched, 3-day window honoured. The urgent
       caveat is spoken **only** when no slot exists inside that window.
 
 ### Dead ends
 
-- [ ] **`no_match`** — migraines (genuinely not orthopedic).
+- [x] **`no_match`** *(passed 2026-09-19 after fix #11)* — migraines (genuinely not orthopedic).
       *Expect:* plain-language decline plus a redirect. `status = no_match`.
 
 ### Resilience
 
-- [ ] **`edge_cases`** — hesitation, odd DOB phrasing, mid-sentence
+- [x] **`edge_cases`** *(passed 2026-09-19)* — hesitation, odd DOB phrasing, mid-sentence
       self-correction, a request to repeat.
       *Expect:* no premature "I didn't catch that", no hangup, booking
       still completes.
