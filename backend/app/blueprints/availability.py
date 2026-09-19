@@ -101,6 +101,24 @@ def get_availability():
     elif is_urgent:
         urgent_window_met = True
 
+    if not slots and practice_id:
+        # practice_id is the doctor's CLOSEST office, which is not
+        # necessarily where they have open time. Filtering on it hard made a
+        # doctor with real availability look fully booked -- a caller was
+        # told there was nothing, then that no other doctor could help, for
+        # a doctor who had open slots at another of his own offices. Treat
+        # it as a preference: fall back to any of this doctor's practices.
+        # Each slot carries its own practice_name, so the caller is still
+        # told which office they'd be going to.
+        slots = provider.get_available_slots(
+            doctor_id=doctor_id,
+            practice_id=None,
+            appointment_type=appointment_type,
+            date_from=date_from,
+            date_to=date_to,
+            limit=limit,
+        )
+
     if not slots:
         return jsonify({"status": "no_slots"})
 

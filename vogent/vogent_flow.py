@@ -875,20 +875,65 @@ nodes = [
         (
             "Let the caller know honestly that there isn't another doctor "
             "available for this -- either no one else here treats it, or the "
-            "others have nothing open right now. Then re-read "
-            "{{node.find_doctors_fn.best_doctor_name}}'s times "
-            "({{node.check_availability_fn.slots}}) conversationally, never a raw "
-            "timestamp, and ask whether one of those would work after all."
+            "others have nothing open right now. Then look at "
+            "{{node.find_doctors_fn.best_doctor_name}}'s times: "
+            "{{node.check_availability_fn.slots}}. If that list has times in "
+            "it, re-read them conversationally (never a raw timestamp) and ask "
+            "whether one would work after all. If that list is EMPTY, do not "
+            "stall, apologize repeatedly, or say you cannot see the times -- "
+            "say plainly that there is nothing available to book right now and "
+            "that someone from the office will call them back, then stop."
         ),
         answer_guidelines=(
             "If the caller picks one of the times, respond with the exact slot_id "
-            "integer of that slot. If they decline them all, respond with exactly "
-            "NONE."
+            "integer of that slot. If there were no times to offer, or the caller "
+            "declines them all, respond with exactly NONE."
         ),
         transitions=[
             equal("no_other_doctor", "answer", "NONE", "dead_end_no_slots"),
-            always("book_appointment_fn"),
+            always("book_fallback_appointment_fn"),
         ],
+    ),
+    function_node(
+        # Books from no_other_doctor's OWN answer. Routing this back to
+        # book_appointment_fn sent Vogent the literal, unresolved string
+        # "{{node.present_slots.answer}}" -- present_slots never ran on this
+        # path -- which 500'd and ended the call on "something went wrong".
+        "book_fallback_appointment_fn", "book-fallback-appointment-fn", "book_appointment",
+        inputs={"slot_id": "{{node.no_other_doctor.answer}}"},
+        outputs=[
+            out("status", "STRING"),
+            out("appointment_id", "INTEGER", nullable=True),
+            out("confirmation", "CUSTOM", nullable=True, custom_schema=CONFIRMATION_SCHEMA),
+        ],
+        started_message="Great, let me get that booked for you.",
+        transitions=[
+            equal("book_fallback_appointment_fn", "status", "scheduled", "log_scheduled_fallback_fn"),
+            equal("book_fallback_appointment_fn", "status", "slot_taken", "dead_end_no_slots"),
+            always("dead_end_system_error"),
+        ],
+    ),
+    function_node(
+        "log_scheduled_fallback_fn", "log-scheduled-fallback-fn", "complete_call",
+        inputs={
+            "status": "scheduled",
+            "appointment_id": "{{node.book_fallback_appointment_fn.appointment_id}}",
+        },
+        outputs=[out("status", "STRING")],
+        transitions=[always("confirm_booking_fallback")],
+    ),
+    freeform_node(
+        "confirm_booking_fallback", "confirm-booking-fallback",
+        (
+            "Confirm the booking to the caller: "
+            "{{node.book_fallback_appointment_fn.confirmation.doctor}} at "
+            "{{node.book_fallback_appointment_fn.confirmation.practice}}, "
+            "{{node.book_fallback_appointment_fn.confirmation.when}}, a "
+            "{{node.book_fallback_appointment_fn.confirmation.appointment_type}} "
+            "appointment. Read it back naturally and clearly. Then ask if there is "
+            "anything else you can help with. Wait for their response. Once they "
+            "say there is nothing else, thank them and say <|hangup|>."
+        ),
     ),
     function_node(
         "book_appointment_fn", "book-appointment-fn", "book_appointment",

@@ -105,3 +105,42 @@ def test_falls_back_to_call_term_appointment_type_for_slot_sizing(client, db, ag
     body = resp.get_json()
 
     assert body["status"] == "no_slots"
+
+
+def test_falls_back_to_other_practice_when_preferred_has_no_slots(client, db, agent_headers):
+    """Regression test for a real dropped call: find_doctors returns the
+    doctor's CLOSEST practice, which is not necessarily where they have
+    open time. Hard-filtering on it made a doctor with real availability
+    look fully booked -- the caller was told nothing was available, then
+    that no other doctor could help either."""
+    doctor = make_doctor(db)
+    nearest = make_practice(db)
+    other = make_practice(db)
+    # Availability exists only at the farther office.
+    make_slot(doctor, other, db, start_time=datetime.now(timezone.utc) + timedelta(days=1))
+
+    resp = client.post(
+        "/api/v1/availability",
+        headers=agent_headers,
+        json={"doctor_id": doctor.id, "practice_id": nearest.id},
+    )
+    body = resp.get_json()
+
+    assert body["status"] == "slots_available"
+    assert body["slots"][0]["practice_name"] == other.name
+
+
+def test_preferred_practice_still_wins_when_it_has_slots(client, db, agent_headers):
+    doctor = make_doctor(db)
+    nearest = make_practice(db)
+    other = make_practice(db)
+    make_slot(doctor, nearest, db, start_time=datetime.now(timezone.utc) + timedelta(days=1))
+    make_slot(doctor, other, db, start_time=datetime.now(timezone.utc) + timedelta(days=2))
+
+    body = client.post(
+        "/api/v1/availability",
+        headers=agent_headers,
+        json={"doctor_id": doctor.id, "practice_id": nearest.id},
+    ).get_json()
+
+    assert {s["practice_name"] for s in body["slots"]} == {nearest.name}
