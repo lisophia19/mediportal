@@ -1,7 +1,7 @@
 import { Link, useParams } from "react-router-dom";
 import { fetchCallDetail } from "../api";
 import { useApiRequest } from "../useApiRequest";
-import { formatDateTime } from "../format";
+import { formatDateTime, formatStatusLabel } from "../format";
 import StatusBadge from "../components/StatusBadge.jsx";
 
 export default function CallDetail() {
@@ -60,7 +60,8 @@ export default function CallDetail() {
             {call.appointment ? (
               <p>
                 {call.appointment.doctor} at {call.appointment.practice} ·{" "}
-                {call.appointment.when} · {call.appointment.appointment_type}
+                {formatDateTime(call.appointment.start_time)} ·{" "}
+                {formatStatusLabel(call.appointment.appointment_type)}
               </p>
             ) : (
               <p>No appointment booked.</p>

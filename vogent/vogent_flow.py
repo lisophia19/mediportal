@@ -608,6 +608,7 @@ nodes = [
             out("status", "STRING"),
             out("slots", "CUSTOM", nullable=True, custom_schema=SLOTS_ARRAY_SCHEMA),
             out("urgent_window_met", "BOOLEAN", nullable=True),
+            out("different_practice_name", "STRING", nullable=True),
         ],
         started_message="I found {{node.find_doctors_fn.best_doctor_spoken_label}}. Let me check their availability.",
         transitions=[
@@ -632,7 +633,12 @@ nodes = [
             "within the next few days for this urgent issue, before listing the "
             "soonest opening you do have. Read out up to 3 of the soonest options "
             "from this list, phrased conversationally -- never read a raw timestamp "
-            "verbatim: {{node.check_availability_fn.slots}}"
+            "verbatim: {{node.check_availability_fn.slots}}. If "
+            "{{node.check_availability_fn.different_practice_name}} is not blank, "
+            "these openings are at that office rather than the one you just named "
+            "-- say so plainly before listing the times (for example, 'the openings "
+            "I have are actually at our <office> location'), because the caller "
+            "would otherwise turn up at the wrong address."
         ),
         answer_guidelines=(
             "If the caller CLEARLY picks one of the listed times with no question or "
@@ -842,6 +848,7 @@ nodes = [
             out("status", "STRING"),
             out("slots", "CUSTOM", nullable=True, custom_schema=SLOTS_ARRAY_SCHEMA),
             out("urgent_window_met", "BOOLEAN", nullable=True),
+            out("different_practice_name", "STRING", nullable=True),
         ],
         started_message="Let me check with {{node.find_next_doctor_fn.best_doctor_spoken_label}} instead.",
         transitions=[
@@ -862,7 +869,10 @@ nodes = [
             "anything within the next few days for this urgent issue, before listing "
             "the soonest opening. Read out up to 3 of the soonest options, phrased "
             "conversationally, never a raw timestamp: "
-            "{{node.check_next_doctor_availability_fn.slots}}"
+            "{{node.check_next_doctor_availability_fn.slots}}. If "
+            "{{node.check_next_doctor_availability_fn.different_practice_name}} is "
+            "not blank, these openings are at that office rather than the one you "
+            "just named -- say so plainly before listing the times."
         ),
         answer_guidelines=(
             "If the caller CLEARLY picks one of the listed times, respond with the "

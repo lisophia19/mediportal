@@ -24,8 +24,8 @@ function callerLabel(call) {
 
 function appointmentLabel(call) {
   if (!call.appointment) return "—";
-  const { doctor, when } = call.appointment;
-  return `${doctor} · ${when}`;
+  const { doctor, start_time: startTime } = call.appointment;
+  return `${doctor} · ${formatDateTime(startTime)}`;
 }
 
 export default function CallList() {

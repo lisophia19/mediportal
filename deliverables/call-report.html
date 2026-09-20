@@ -5,101 +5,42 @@
 <style>
   @page { size: Letter; margin: 0.6in 0.7in; }
   * { box-sizing: border-box; }
-  body {
-    font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
-    color: #2b2d33;
-    margin: 0;
-    font-size: 13px;
-    line-height: 1.5;
-  }
-  .header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    border-bottom: 3px solid #6C7FE0;
-    padding-bottom: 14px;
-    margin-bottom: 22px;
-  }
+  body { font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
+         color: #2b2d33; margin: 0; font-size: 13px; line-height: 1.5; }
+  .header { display: flex; align-items: center; justify-content: space-between;
+            border-bottom: 3px solid #6C7FE0; padding-bottom: 14px; margin-bottom: 22px; }
   .header img { height: 42px; }
   .header .doc-title { text-align: right; }
-  .header .doc-title h1 {
-    font-size: 17px;
-    margin: 0;
-    color: #2b2d33;
-  }
-  .header .doc-title .date {
-    font-size: 11px;
-    color: #8a8d99;
-    margin-top: 2px;
-  }
-  h2.section {
-    font-size: 13px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: #6C7FE0;
-    border-bottom: 1px solid #e4e6ef;
-    padding-bottom: 5px;
-    margin: 22px 0 12px;
-  }
-  .summary-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px 28px;
-    background: #f6f7fc;
-    border: 1px solid #e4e6ef;
-    border-radius: 8px;
-    padding: 16px 20px;
-  }
-  .summary-grid .label {
-    font-size: 10.5px;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    color: #8a8d99;
-    margin-bottom: 1px;
-  }
-  .summary-grid .value {
-    font-size: 13px;
-    color: #2b2d33;
-  }
-  .badge {
-    display: inline-block;
-    background: #e8ecfb;
-    color: #4a5bc9;
-    font-size: 10.5px;
-    font-weight: 600;
-    padding: 2px 9px;
-    border-radius: 100px;
-    margin-top: 2px;
-  }
-  .transcript { margin-top: 6px; }
-  .turn { display: flex; margin-bottom: 9px; }
-  .turn .who {
-    flex: 0 0 78px;
-    font-size: 10.5px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    padding-top: 8px;
-  }
+  .header .doc-title h1 { font-size: 17px; margin: 0; }
+  .header .doc-title .date { font-size: 11px; color: #8a8d99; margin-top: 2px; }
+  h2.section { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em;
+               color: #6C7FE0; border-bottom: 1px solid #e4e6ef; padding-bottom: 5px;
+               margin: 22px 0 12px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 28px;
+          background: #f6f7fc; border: 1px solid #e4e6ef; border-radius: 8px;
+          padding: 16px 20px; }
+  .grid .label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.03em;
+                 color: #8a8d99; margin-bottom: 1px; }
+  .grid .value { font-size: 13px; }
+  .badge { display: inline-block; background: #e8ecfb; color: #4a5bc9; font-size: 10.5px;
+           font-weight: 600; padding: 2px 9px; border-radius: 100px; margin-top: 2px; }
+  .turn { display: flex; margin-bottom: 9px; page-break-inside: avoid; }
+  .turn .who { flex: 0 0 74px; font-size: 10.5px; font-weight: 700; text-transform: uppercase;
+               letter-spacing: 0.03em; padding-top: 8px; }
   .turn.ai .who { color: #4a5bc9; }
   .turn.caller .who { color: #5a5a5a; }
-  .turn .bubble {
-    flex: 1;
-    padding: 8px 12px;
-    border-radius: 8px;
-    font-size: 12.5px;
-  }
+  .turn .bubble { flex: 1; padding: 8px 12px; border-radius: 8px; font-size: 12.5px; }
   .turn.ai .bubble { background: #f0f2fc; }
   .turn.caller .bubble { background: #f4f4f5; }
-  .footer {
-    margin-top: 28px;
-    padding-top: 12px;
-    border-top: 1px solid #e4e6ef;
-    font-size: 10px;
-    color: #9a9da8;
-    display: flex;
-    justify-content: space-between;
-  }
+  .moment { background: #fffaf0; border-left: 3px solid #e0a33e; padding: 9px 13px;
+            margin: 9px 0 14px; font-size: 12.5px; border-radius: 0 6px 6px 0; }
+  .moment b { color: #9a6b12; }
+  ul.road { margin: 0; padding-left: 18px; }
+  ul.road li { margin-bottom: 7px; font-size: 12.5px; }
+  ul.road li b { color: #2b2d33; }
+  .note { font-size: 11px; color: #8a8d99; margin-top: 10px; }
+  .footer { margin-top: 26px; padding-top: 12px; border-top: 1px solid #e4e6ef;
+            font-size: 10px; color: #9a9da8; display: flex; justify-content: space-between; }
 </style>
 </head>
 <body>
@@ -107,81 +48,113 @@
   <div class="header">
     <img src="kyron-logo.png" alt="Kyron Medical">
     <div class="doc-title">
-      <h1>Live Call Demo — Long Island Bone &amp; Joint</h1>
-      <div class="date">Recorded September 17, 2026 &middot; Real end-to-end phone call</div>
+      <h1>Live Call Demo &mdash; Long Island Bone &amp; Joint</h1>
+      <div class="date">Recorded September 20, 2026 &middot; Real end-to-end phone call</div>
     </div>
   </div>
 
   <h2 class="section">Call Summary</h2>
-  <div class="summary-grid">
-    <div>
-      <div class="label">Caller</div>
-      <div class="value">Linda Whitfield (new patient, demo persona)</div>
-    </div>
-    <div>
-      <div class="label">Outcome</div>
-      <div class="value"><span class="badge">Scheduled</span></div>
-    </div>
-    <div>
-      <div class="label">Reason for visit</div>
-      <div class="value">Right knee pain, swelling, and stiffness for several months</div>
-    </div>
-    <div>
-      <div class="label">Matched condition</div>
-      <div class="value">Osteoarthritis, Knee (auto-matched from free speech, 0.75 confidence)</div>
-    </div>
-    <div>
-      <div class="label">Routed to</div>
-      <div class="value">Dr. Michael Fracchia &mdash; Joint Reconstruction / Hip &amp; Knee</div>
-    </div>
-    <div>
-      <div class="label">Location</div>
-      <div class="value">Melville office (auto-selected by proximity to caller ZIP)</div>
-    </div>
-    <div>
-      <div class="label">Appointment booked</div>
-      <div class="value">Wednesday, September 23rd at 10:20 AM</div>
-    </div>
-    <div>
-      <div class="label">Call duration</div>
-      <div class="value">2 minutes 28 seconds, fully automated</div>
+  <div class="grid">
+    <div><div class="label">Caller</div>
+      <div class="value">New patient, hip &amp; lower-back pain (demo persona)</div></div>
+    <div><div class="label">Outcome</div>
+      <div class="value"><span class="badge">Scheduled</span></div></div>
+    <div><div class="label">What the caller said</div>
+      <div class="value">&ldquo;I'm having a lot of pain lately, and I'm not really sure what's causing it.&rdquo;</div></div>
+    <div><div class="label">Matched condition</div>
+      <div class="value">Hip pain &mdash; reached by clinical triage, not guesswork</div></div>
+    <div><div class="label">Booked with</div>
+      <div class="value">Dr. Brian McGinley &mdash; Joint Reconstruction / Hip &amp; Knee</div></div>
+    <div><div class="label">Location</div>
+      <div class="value">Port Jefferson office</div></div>
+    <div><div class="label">Appointment</div>
+      <div class="value">Thursday, September 24th at 4:20 PM</div></div>
+    <div><div class="label">Call duration</div>
+      <div class="value">3 minutes 4 seconds, fully automated</div></div>
+  </div>
+
+  <h2 class="section">What this call demonstrates</h2>
+  <div class="grid" style="grid-template-columns: 1fr;">
+    <div class="value">
+      The caller opened with no useful detail at all &mdash; no body part, no diagnosis, no
+      doctor, no location. The agent asked a real orthopedic screening question to narrow
+      it down, then handled two consecutive changes of mind mid-call without losing the
+      thread, and still booked a correct appointment. Three things worth listening for:
     </div>
   </div>
 
-  <h2 class="section">What this demonstrates</h2>
-  <div class="summary-grid" style="grid-template-columns: 1fr;">
-    <div class="value">
-      The caller never named a diagnosis, a doctor, or a location &mdash; only a plain-language
-      description of the problem. The agent independently matched the complaint to the right
-      clinical condition, found the correct specialist for that condition, ranked locations by
-      distance to the caller, checked live availability, and booked the appointment &mdash; all
-      in one uninterrupted call, with no human involved on our side.
-    </div>
-  </div>
+  <div class="moment"><b>1. Clinical triage, not keyword matching.</b>
+    &ldquo;A lot of pain&rdquo; could be hip or spine &mdash; they present almost identically over the
+    phone. The agent asks whether the pain travels down the leg or stays in one spot, which
+    is the same question a trained intake coordinator would ask, and routes on the answer.</div>
+
+  <div class="moment"><b>2. &ldquo;Is there anyone else, and at a later time?&rdquo;</b>
+    Rather than repeating itself or giving up, the agent pulls a fresh set of later openings
+    and offers them.</div>
+
+  <div class="moment"><b>3. &ldquo;Are there any other doctors available?&rdquo;</b>
+    The agent finds the next eligible physician for that condition, checks his calendar,
+    names his office, and books there instead &mdash; all without a human stepping in.</div>
 
   <h2 class="section">Full Transcript</h2>
   <div class="transcript">
-    <div class="turn ai"><div class="who">Agent</div><div class="bubble">Thanks for calling! Welcome to Long Island Bone and Joint &mdash; what can we help you with today?</div></div>
-    <div class="turn caller"><div class="who">Caller</div><div class="bubble">Hi. My right knee has been bothering me for a few months now. It's swollen and kind of stiff, especially in the mornings after I've been sitting for a little while.</div></div>
-    <div class="turn ai"><div class="who">Agent</div><div class="bubble">I'm sorry to hear that &mdash; we'll help you with the right knee pain, swelling, and stiffness. It sounds like this is possible knee arthritis &mdash; is that right?</div></div>
-    <div class="turn caller"><div class="who">Caller</div><div class="bubble">Yeah. I think it might be.</div></div>
-    <div class="turn ai"><div class="who">Agent</div><div class="bubble">Great, let's get you booked in. Could I get your first name?</div></div>
-    <div class="turn caller"><div class="who">Caller</div><div class="bubble">Linda</div></div>
+    <div class="turn ai"><div class="who">Agent</div><div class="bubble">Thanks for calling! Welcome to Long Island Bone and Joint — what can we help you with today?</div></div>
+    <div class="turn caller"><div class="who">Caller</div><div class="bubble">I&#x27;m having a lot of pain lately, and I&#x27;m not really sure what&#x27;s causing it.</div></div>
+    <div class="turn ai"><div class="who">Agent</div><div class="bubble">I’m sorry to hear that — we’ll help you with that.</div></div>
+    <div class="turn ai"><div class="who">Agent</div><div class="bubble">Does the pain travel or shoot down into your leg, or does it mostly stay in one spot?</div></div>
+    <div class="turn caller"><div class="who">Caller</div><div class="bubble">It&#x27;s kind of all over, but I think it&#x27;s mostly in my hip and lower back.</div></div>
+    <div class="turn ai"><div class="who">Agent</div><div class="bubble">Got it — mostly around the hip and lower back. 
+ Based on that, it sounds like our hip team would be the right fit — does that sound right?</div></div>
+    <div class="turn caller"><div class="who">Caller</div><div class="bubble">Yeah. I think so.</div></div>
+    <div class="turn ai"><div class="who">Agent</div><div class="bubble">Great, let&#x27;s get you booked in. Could I get your first name?</div></div>
+    <div class="turn caller"><div class="who">Caller</div><div class="bubble">Pat.</div></div>
     <div class="turn ai"><div class="who">Agent</div><div class="bubble">And your last name?</div></div>
-    <div class="turn caller"><div class="who">Caller</div><div class="bubble">Whitfield.</div></div>
+    <div class="turn caller"><div class="who">Caller</div><div class="bubble">Test.</div></div>
     <div class="turn ai"><div class="who">Agent</div><div class="bubble">And your date of birth?</div></div>
-    <div class="turn caller"><div class="who">Caller</div><div class="bubble">June twelfth 19 62.</div></div>
-    <div class="turn ai"><div class="who">Agent</div><div class="bubble">One moment while I look up your information. I don't see an existing record for you &mdash; let's get you set up. What's the best phone number for you?</div></div>
-    <div class="turn caller"><div class="who">Caller</div><div class="bubble">7 0 3 5 5 5 0 1 4 8.</div></div>
-    <div class="turn ai"><div class="who">Agent</div><div class="bubble">Great, one moment while I create your record. What's your ZIP code, or the town you're in?</div></div>
+    <div class="turn caller"><div class="who">Caller</div><div class="bubble">November fifth 19 58.</div></div>
+    <div class="turn ai"><div class="who">Agent</div><div class="bubble">One moment while I look up your information. What’s your ZIP code, or the town you’re in?</div></div>
     <div class="turn caller"><div class="who">Caller</div><div class="bubble">1 1 5 6 6.</div></div>
-    <div class="turn ai"><div class="who">Agent</div><div class="bubble">Before continuing, let me read back what I have collected so far to make sure it's all correct: name Linda Whitfield, date of birth June 12th, 1962, location 11566, and the reason for the visit is that your right knee has been bothering you for a few months now, it's swollen and kind of stiff, especially in the mornings and after you've been sitting for a little while. Is all of that right?</div></div>
+    <div class="turn ai"><div class="who">Agent</div><div class="bubble">Before continuing, let me read back what I have collected so far to make sure it’s all correct: name Pat Test, date of birth November 5th, 1958, location 11566, and the reason for the visit is, “I’m having a lot of pain lately, and I’m not really sure what’s causing it.” Is all of that right?</div></div>
     <div class="turn caller"><div class="who">Caller</div><div class="bubble">Yes.</div></div>
-    <div class="turn ai"><div class="who">Agent</div><div class="bubble">I found Dr. Michael Fracchia, one of our joint reconstruction / hip &amp; knee specialists, at our Melville office about 11.3 miles from you. Let me check their availability. I wasn't able to find anything within the next few days for this urgent issue, but here are the soonest openings I do have with Dr. Michael Fracchia: Wednesday, September 23rd at 10:00 AM, 10:20 AM, or 10:40 AM. Which of those would work best for you?</div></div>
-    <div class="turn caller"><div class="who">Caller</div><div class="bubble">10 20 AM.</div></div>
-    <div class="turn ai"><div class="who">Agent</div><div class="bubble">Great, let me get that booked for you. You're all set. I have you scheduled for a new patient consultation with Dr. Michael Fracchia at our Melville office on Wednesday, September 23rd at 10:20 AM. Is there anything else I can help you with today?</div></div>
-    <div class="turn caller"><div class="who">Caller</div><div class="bubble">Nope. That's it.</div></div>
-    <div class="turn ai"><div class="who">Agent</div><div class="bubble">Thank you, Linda. We'll see you then.</div></div>
+    <div class="turn ai"><div class="who">Agent</div><div class="bubble">I found Dr. Michael Fracchia, one of our joint reconstruction / hip &amp; knee specialists, at our Melville office about 11.3 miles from you. Let me check their availability. I found some openings with Dr. Michael Fracchia: Tuesday, September 22nd at 3:40 PM, Friday, September 25th at 3:00 PM, or Friday, September 25th at 4:00 PM. Which of those works best for you?</div></div>
+    <div class="turn caller"><div class="who">Caller</div><div class="bubble">Is there anyone else and at a later time?</div></div>
+    <div class="turn ai"><div class="who">Agent</div><div class="bubble">For Dr. Fracchia, I also have Friday, September 25th at 4:20 PM, Monday, September 28th at 11:20 AM, or Monday, September 28th at 2:00 PM. Which of those works best for you?</div></div>
+    <div class="turn caller"><div class="who">Caller</div><div class="bubble">Are there any other doctors available?</div></div>
+    <div class="turn ai"><div class="who">Agent</div><div class="bubble">Let me check with Dr. Brian McGinley, one of our joint reconstruction / hip &amp; knee specialists, at our Port Jefferson office about 31.7 miles from you instead. I found some openings with Dr. Brian McGinley at our Port Jefferson office: Thursday, September 24th at 4:20 PM, Monday, September 28th at 9:20 AM, or Monday, September 28th at 9:40 AM. Which of those works best for you?</div></div>
+    <div class="turn caller"><div class="who">Caller</div><div class="bubble">Can we do the Thursday time, please?</div></div>
+    <div class="turn ai"><div class="who">Agent</div><div class="bubble">Absolutely, I’ll take that Thursday time for you. 
+ Great, let me get that booked for you. You’re all set. I have you scheduled for a new patient consultation with Dr. Brian McGinley at our Port Jefferson office on Thursday, September 24th at 4:20 PM. Is there anything else I can help you with today?</div></div>
+    <div class="turn caller"><div class="who">Caller</div><div class="bubble">Nope. That&#x27;s it.</div></div>
+    <div class="turn ai"><div class="who">Agent</div><div class="bubble">Thank you for</div></div>
+    <div class="turn caller"><div class="who">Caller</div><div class="bubble">Thank you.</div></div>
+    <div class="turn ai"><div class="who">Agent</div><div class="bubble">You’re welcome.</div></div>
+  </div>
+
+  <h2 class="section">In Progress</h2>
+  <div class="grid" style="grid-template-columns: 1fr;">
+    <div class="value">
+      <ul class="road">
+        <li><b>Provider coverage review.</b> Routing is driven entirely by the practice's own
+          eligibility matrix rather than anything hard-coded, which means it surfaces gaps in
+          that data. A few conditions currently map to specialists a patient would not expect
+          &mdash; we would like to walk through those with the practice and correct the
+          source data.</li>
+        <li><b>Location accuracy.</b> When a physician's nearest office has no opening, the
+          agent books at another of that physician's offices. We are making the agent state
+          the change of location out loud before the caller commits to a time.</li>
+        <li><b>Call review dashboard.</b> Every call is already captured with its transcript,
+          routing decision and booking outcome. Next is richer review &mdash; filtering,
+          match-quality flagging, and letting staff edit provider coverage directly instead
+          of going through us.</li>
+        <li><b>Live schedule integration.</b> Availability currently runs against a modelled
+          calendar. Connecting the practice's real schedule is a configuration change, not a
+          rebuild &mdash; the booking logic behind it stays the same.</li>
+        <li><b>Insurance and referrals.</b> Capturing plan details during the call and
+          applying plan-based routing rules.</li>
+      </ul>
+      <div class="note">Not yet in scope: reschedule and cancellation by phone, multi-patient
+        calls, and Spanish-language handling.</div>
+    </div>
   </div>
 
   <div class="footer">

@@ -101,6 +101,7 @@ def get_availability():
     elif is_urgent:
         urgent_window_met = True
 
+    moved_practice_name = None
     if not slots and practice_id:
         # practice_id is the doctor's CLOSEST office, which is not
         # necessarily where they have open time. Filtering on it hard made a
@@ -108,8 +109,6 @@ def get_availability():
         # told there was nothing, then that no other doctor could help, for
         # a doctor who had open slots at another of his own offices. Treat
         # it as a preference: fall back to any of this doctor's practices.
-        # Each slot carries its own practice_name, so the caller is still
-        # told which office they'd be going to.
         slots = provider.get_available_slots(
             doctor_id=doctor_id,
             practice_id=None,
@@ -118,6 +117,12 @@ def get_availability():
             date_to=date_to,
             limit=limit,
         )
+        # The caller was told the nearest office moments ago, so the flow has
+        # to say the location changed. Without this a caller was offered
+        # times "at our Melville office" and then booked into Riverhead --
+        # they'd have driven to the wrong place.
+        if slots:
+            moved_practice_name = slots[0].practice_name
 
     if not slots:
         return jsonify({"status": "no_slots"})
@@ -125,4 +130,6 @@ def get_availability():
     response = {"status": "slots_available", "slots": [slot_to_dict(s) for s in slots]}
     if urgent_window_met is not None:
         response["urgent_window_met"] = urgent_window_met
+    if moved_practice_name:
+        response["different_practice_name"] = moved_practice_name
     return jsonify(response)

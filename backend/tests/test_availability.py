@@ -144,3 +144,36 @@ def test_preferred_practice_still_wins_when_it_has_slots(client, db, agent_heade
     ).get_json()
 
     assert {s["practice_name"] for s in body["slots"]} == {nearest.name}
+
+
+def test_practice_fallback_reports_the_office_that_changed(client, db, agent_headers):
+    """Regression test for a real demo call: the caller was offered times
+    "at our Melville office about 11.3 miles from you" and then booked into
+    Riverhead -- they would have driven to the wrong address. When the
+    fallback moves offices, say which one so the flow can tell the caller."""
+    doctor = make_doctor(db)
+    nearest = make_practice(db)
+    other = make_practice(db)
+    make_slot(doctor, other, db, start_time=datetime.now(timezone.utc) + timedelta(days=1))
+
+    body = client.post(
+        "/api/v1/availability",
+        headers=agent_headers,
+        json={"doctor_id": doctor.id, "practice_id": nearest.id},
+    ).get_json()
+
+    assert body["different_practice_name"] == other.name
+
+
+def test_no_office_change_reported_when_preferred_practice_used(client, db, agent_headers):
+    doctor = make_doctor(db)
+    nearest = make_practice(db)
+    make_slot(doctor, nearest, db, start_time=datetime.now(timezone.utc) + timedelta(days=1))
+
+    body = client.post(
+        "/api/v1/availability",
+        headers=agent_headers,
+        json={"doctor_id": doctor.id, "practice_id": nearest.id},
+    ).get_json()
+
+    assert "different_practice_name" not in body
