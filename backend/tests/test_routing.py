@@ -639,6 +639,56 @@ def test_find_doctors_matched_ranks_by_distance(client, db, agent_headers):
     assert body["best_doctor_name"] == body["doctors"][0]["name"]
 
 
+def test_find_doctors_pins_to_preferred_doctor(client, db, agent_headers):
+    """spec §5.1a: a caller who named a specific doctor gets that doctor
+    pinned regardless of distance ranking -- find-doctor-by-name validates
+    eligibility before this is ever called, so this just needs to resolve
+    their real practice the same way the normal ranked path does."""
+    term = _make_term(db)
+    near = _make_practice(db, "Merrick", "11566", lat=40.6668, lon=-73.5502)
+    far = _make_practice(db, "Port Jefferson", "11777", lat=40.9462, lon=-73.0704)
+    doc_near = _make_doctor(db, "Alice", "Chen", "Hand & Wrist", near)
+    doc_far = _make_doctor(db, "Bennett", "Brown", "Hand & Wrist", far)
+    db.add(TermEligibility(term_id=term.id, doctor_id=doc_near.id, min_age=1, max_age=100))
+    db.add(TermEligibility(term_id=term.id, doctor_id=doc_far.id, min_age=1, max_age=100))
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/routing/find-doctors",
+        json={
+            "term_id": term.id,
+            "date_of_birth": "1991-04-02",
+            "zip": "11566",
+            "call_id": "vg_preferred",
+            "preferred_doctor_id": doc_far.id,
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched"
+    assert body["best_doctor_id"] == doc_far.id
+    assert body["best_practice_id"] == far.id
+
+
+def test_find_doctors_preferred_doctor_inactive_is_not_covered(client, db, agent_headers):
+    term = _make_term(db)
+    practice = _make_practice(db, "Merrick", "11566")
+    doctor = _make_doctor(db, "Alice", "Chen", "Hand & Wrist", practice, active=False)
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/routing/find-doctors",
+        json={
+            "term_id": term.id,
+            "date_of_birth": "1991-04-02",
+            "call_id": "vg_preferred_inactive",
+            "preferred_doctor_id": doctor.id,
+        },
+        headers=agent_headers,
+    )
+    assert resp.get_json()["status"] == "no_eligible_doctor"
+
+
 def test_find_doctors_excludes_already_tried_doctor(client, db, agent_headers):
     """A caller who's told the closest doctor has no slots (or explicitly
     asks for someone else) should get the NEXT-best eligible doctor, not
@@ -774,5 +824,181 @@ def test_find_doctors_requires_agent_key(client, db):
     resp = client.post(
         "/api/v1/routing/find-doctors",
         json={"term_id": 1, "date_of_birth": "1991-04-02", "zip": "11563", "call_id": "vg_9"},
+    )
+    assert resp.status_code == 401
+
+
+# --- §5.1a find-doctor-by-name --------------------------------------------
+
+
+def _mock_extraction(monkeypatch, doctor_name=None, practice_name=None):
+    """Mocks the LLM name-extraction call find_doctor_by_name makes."""
+    _mock_llm(monkeypatch, {"doctor_name": doctor_name, "practice_name": practice_name})
+
+
+def test_find_doctor_by_name_matches_doctor_no_office_named(client, db, agent_headers, monkeypatch):
+    term = _make_term(db)
+    practice = _make_practice(db, "Melville", "11747", lat=40.79, lon=-73.42)
+    doctor = _make_doctor(db, "Michael", "Fracchia", "Joint Reconstruction", practice)
+    db.add(TermEligibility(term_id=term.id, doctor_id=doctor.id, min_age=1, max_age=100))
+    db.commit()
+    _mock_extraction(monkeypatch, doctor_name="Fracchia")
+
+    resp = client.post(
+        "/api/v1/routing/find-doctor-by-name",
+        json={
+            "doctor_office_text": "Dr. Fracchia",
+            "term_id": term.id,
+            "date_of_birth": "1970-01-01",
+            "call_id": "vg_name1",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched"
+    assert body["best_doctor_id"] == doctor.id
+
+
+def test_find_doctor_by_name_matches_doctor_and_office(client, db, agent_headers, monkeypatch):
+    term = _make_term(db)
+    practice = _make_practice(db, "Melville", "11747", lat=40.79, lon=-73.42)
+    doctor = _make_doctor(db, "Michael", "Fracchia", "Joint Reconstruction", practice)
+    db.add(TermEligibility(term_id=term.id, doctor_id=doctor.id, min_age=1, max_age=100))
+    db.commit()
+    _mock_extraction(monkeypatch, doctor_name="Fracchia", practice_name="Melville")
+
+    resp = client.post(
+        "/api/v1/routing/find-doctor-by-name",
+        json={
+            "doctor_office_text": "Dr. Fracchia at Melville",
+            "term_id": term.id,
+            "date_of_birth": "1970-01-01",
+            "call_id": "vg_name2",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched"
+    assert body["best_doctor_id"] == doctor.id
+    assert body["best_practice_id"] == practice.id
+
+
+def test_find_doctor_by_name_doctor_not_at_requested_office_offers_both_options(
+    client, db, agent_headers, monkeypatch
+):
+    """The real "call 3" case: caller wants a specific doctor AND office,
+    but that doctor doesn't practice there. Must offer (a) that doctor at
+    their real office and (b) a different eligible doctor who is really at
+    the requested office -- never silently pick one or dead-end."""
+    term = _make_term(db)
+    melville = _make_practice(db, "Melville", "11747", lat=40.79, lon=-73.42)
+    port_jeff = _make_practice(db, "Port Jefferson", "11777", lat=40.94, lon=-73.07)
+    fracchia = _make_doctor(db, "Michael", "Fracchia", "Joint Reconstruction", melville)
+    mcginley = _make_doctor(db, "Brian", "McGinley", "Joint Reconstruction", port_jeff)
+    db.add(TermEligibility(term_id=term.id, doctor_id=fracchia.id, min_age=1, max_age=100))
+    db.add(TermEligibility(term_id=term.id, doctor_id=mcginley.id, min_age=1, max_age=100))
+    db.commit()
+    _mock_extraction(monkeypatch, doctor_name="Fracchia", practice_name="Port Jefferson")
+
+    resp = client.post(
+        "/api/v1/routing/find-doctor-by-name",
+        json={
+            "doctor_office_text": "Dr. Fracchia at your Port Jefferson office",
+            "term_id": term.id,
+            "date_of_birth": "1970-01-01",
+            "call_id": "vg_name3",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "needs_choice"
+    assert body["requested_practice_id"] == port_jeff.id
+    assert body["option_a_doctor_id"] == fracchia.id
+    assert body["option_b_doctor_id"] == mcginley.id
+    assert "Port Jefferson" in body["spoken_response"]
+
+
+def test_find_doctor_by_name_mismatch_with_no_alternate_doctor_still_offers_own_office(
+    client, db, agent_headers, monkeypatch
+):
+    """Same mismatch, but nobody else treats this at the requested office --
+    still offer the one real fix instead of dead-ending."""
+    term = _make_term(db)
+    melville = _make_practice(db, "Melville", "11747", lat=40.79, lon=-73.42)
+    port_jeff = _make_practice(db, "Port Jefferson", "11777", lat=40.94, lon=-73.07)
+    fracchia = _make_doctor(db, "Michael", "Fracchia", "Joint Reconstruction", melville)
+    db.add(TermEligibility(term_id=term.id, doctor_id=fracchia.id, min_age=1, max_age=100))
+    db.commit()
+    _mock_extraction(monkeypatch, doctor_name="Fracchia", practice_name="Port Jefferson")
+
+    resp = client.post(
+        "/api/v1/routing/find-doctor-by-name",
+        json={
+            "doctor_office_text": "Dr. Fracchia at your Port Jefferson office",
+            "term_id": term.id,
+            "date_of_birth": "1970-01-01",
+            "call_id": "vg_name4",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "needs_choice"
+    assert body["option_a_doctor_id"] == fracchia.id
+    assert body["option_b_doctor_id"] is None
+
+
+def test_find_doctor_by_name_doctor_ineligible_for_term_falls_back(client, db, agent_headers, monkeypatch):
+    """A named doctor who doesn't treat this condition at all shouldn't
+    dead-end the call -- fall back to whoever does."""
+    term = _make_term(db)
+    practice = _make_practice(db, "Melville", "11747", lat=40.79, lon=-73.42)
+    wrong_doctor = _make_doctor(db, "Michael", "Fracchia", "Joint Reconstruction", practice)
+    right_doctor = _make_doctor(db, "Rasel", "Rana", "Spine", practice)
+    db.add(TermEligibility(term_id=term.id, doctor_id=right_doctor.id, min_age=1, max_age=100))
+    db.commit()
+    _mock_extraction(monkeypatch, doctor_name="Fracchia")
+
+    resp = client.post(
+        "/api/v1/routing/find-doctor-by-name",
+        json={
+            "doctor_office_text": "Dr. Fracchia",
+            "term_id": term.id,
+            "date_of_birth": "1970-01-01",
+            "call_id": "vg_name5",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched"
+    assert body["best_doctor_id"] == right_doctor.id
+
+
+def test_find_doctor_by_name_no_name_extracted_falls_back_to_top_ranked(client, db, agent_headers, monkeypatch):
+    term = _make_term(db)
+    practice = _make_practice(db, "Melville", "11747", lat=40.79, lon=-73.42)
+    doctor = _make_doctor(db, "Rasel", "Rana", "Spine", practice)
+    db.add(TermEligibility(term_id=term.id, doctor_id=doctor.id, min_age=1, max_age=100))
+    db.commit()
+    _mock_extraction(monkeypatch, doctor_name=None, practice_name=None)
+
+    resp = client.post(
+        "/api/v1/routing/find-doctor-by-name",
+        json={
+            "doctor_office_text": "um, not sure, whoever's available",
+            "term_id": term.id,
+            "date_of_birth": "1970-01-01",
+            "call_id": "vg_name6",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched"
+    assert body["best_doctor_id"] == doctor.id
+
+
+def test_find_doctor_by_name_requires_agent_key(client, db):
+    resp = client.post(
+        "/api/v1/routing/find-doctor-by-name",
+        json={"doctor_office_text": "Dr. Fracchia", "term_id": 1, "date_of_birth": "1970-01-01", "call_id": "vg_x"},
     )
     assert resp.status_code == 401

@@ -335,7 +335,7 @@ nodes = [
             "with exactly NAME. For any other correction respond with exactly NO."
         ),
         transitions=[
-            equal("confirm_details", "answer", "YES", "find_doctors_fn"),
+            equal("confirm_details", "answer", "YES", "ask_doctor_preference"),
             equal("confirm_details", "answer", "NAME", "correct_name"),
             always("correct_name"),
         ],
@@ -360,7 +360,280 @@ nodes = [
         "save_corrected_name", "save-corrected-name", "update_patient_name",
         inputs={"full_name": "{{node.correct_name.answer}}"},
         outputs=[out("status", "STRING")],
-        transitions=[always("find_doctors_fn")],
+        transitions=[always("ask_doctor_preference")],
+    ),
+    # spec §5.1a: give the caller a chance to name a specific doctor and/or
+    # office before auto-picking by distance. Most callers have no
+    # preference (NONE), which reaches find_doctors_fn completely unchanged
+    # from before this feature existed.
+    question_node(
+        "ask_doctor_preference", "ask-doctor-preference",
+        (
+            "Before I check availability, did you have a specific doctor or office "
+            "in mind, or would you like me to find the right specialist for you?"
+        ),
+        answer_guidelines=(
+            "If the caller has no preference, respond with exactly NONE. Otherwise "
+            "respond with what they said about the doctor and/or office, verbatim."
+        ),
+        transitions=[
+            equal("ask_doctor_preference", "answer", "NONE", "find_doctors_fn"),
+            always("find_requested_doctor_fn"),
+        ],
+    ),
+    function_node(
+        "find_requested_doctor_fn", "find-requested-doctor-fn", "find_doctor_by_name",
+        inputs={
+            "doctor_office_text": "{{node.ask_doctor_preference.answer}}",
+            "date_of_birth": "{{node.ask_dob.answer}}",
+            "zip": "{{node.ask_zip.answer}}",
+        },
+        outputs=[
+            out("status", "STRING"),
+            out("term_urgency", "STRING", nullable=True),
+            out("best_doctor_id", "INTEGER", nullable=True),
+            out("best_practice_id", "INTEGER", nullable=True),
+            out("best_doctor_spoken_label", "STRING", nullable=True),
+            out("best_doctor_name", "STRING", nullable=True),
+            out("requested_practice_id", "INTEGER", nullable=True),
+            out("option_a_doctor_id", "INTEGER", nullable=True),
+            out("option_a_doctor_name", "STRING", nullable=True),
+            out("option_b_doctor_id", "INTEGER", nullable=True),
+            out("option_b_doctor_name", "STRING", nullable=True),
+            out("spoken_response", "STRING", nullable=True),
+        ],
+        transitions=[
+            equal("find_requested_doctor_fn", "status", "matched", "check_requested_availability_fn"),
+            equal("find_requested_doctor_fn", "status", "needs_choice", "choose_requested_doctor_option"),
+            equal("find_requested_doctor_fn", "status", "no_eligible_doctor", "dead_end_no_doctor"),
+            always("dead_end_system_error"),
+        ],
+    ),
+    function_node(
+        "check_requested_availability_fn", "check-requested-availability-fn", "get_availability",
+        inputs={
+            "doctor_id": "{{node.find_requested_doctor_fn.best_doctor_id}}",
+            "practice_id": "{{node.find_requested_doctor_fn.best_practice_id}}",
+            "urgency": "{{node.find_requested_doctor_fn.term_urgency}}",
+        },
+        outputs=[
+            out("status", "STRING"),
+            out("slots", "CUSTOM", nullable=True, custom_schema=SLOTS_ARRAY_SCHEMA),
+            out("urgent_window_met", "BOOLEAN", nullable=True),
+            out("different_practice_name", "STRING", nullable=True),
+        ],
+        started_message="Great, let me check {{node.find_requested_doctor_fn.best_doctor_spoken_label}}'s availability.",
+        transitions=[
+            equal("check_requested_availability_fn", "status", "slots_available", "present_requested_slots"),
+            equal("check_requested_availability_fn", "status", "no_slots", "dead_end_no_slots"),
+            always("dead_end_system_error"),
+        ],
+    ),
+    question_node(
+        "present_requested_slots", "present-requested-slots",
+        (
+            "Let the caller know you found some openings with "
+            "{{node.find_requested_doctor_fn.best_doctor_name}}. This visit is NOT "
+            "urgent unless urgent_window_met is present and literally the boolean "
+            "false -- if blank, missing, or not present, never mention urgency. Only "
+            "when {{node.check_requested_availability_fn.urgent_window_met}} is "
+            "explicitly false, first say honestly you could not find anything within "
+            "the next few days for this urgent issue, before listing the soonest "
+            "opening. Read out up to 3 of the soonest options, phrased "
+            "conversationally, never a raw timestamp: "
+            "{{node.check_requested_availability_fn.slots}}. If "
+            "{{node.check_requested_availability_fn.different_practice_name}} is not "
+            "blank, these openings are at that office rather than the one just "
+            "discussed -- say so plainly before listing the times."
+        ),
+        answer_guidelines=(
+            "If the caller CLEARLY picks one of the listed times, respond with the "
+            "exact slot_id integer. If they have no preference, respond with the "
+            "slot_id of the soonest slot. Otherwise, respond with exactly NONE."
+        ),
+        transitions=[
+            equal("present_requested_slots", "answer", "NONE", "dead_end_no_slots"),
+            always("book_requested_appointment_fn"),
+        ],
+    ),
+    function_node(
+        "book_requested_appointment_fn", "book-requested-appointment-fn", "book_appointment",
+        inputs={"slot_id": "{{node.present_requested_slots.answer}}"},
+        outputs=[
+            out("status", "STRING"),
+            out("appointment_id", "INTEGER", nullable=True),
+            out("confirmation", "CUSTOM", nullable=True, custom_schema=CONFIRMATION_SCHEMA),
+        ],
+        started_message="Great, let me get that booked for you.",
+        transitions=[
+            equal("book_requested_appointment_fn", "status", "scheduled", "log_scheduled_requested_fn"),
+            equal("book_requested_appointment_fn", "status", "slot_taken", "dead_end_no_slots"),
+            always("dead_end_system_error"),
+        ],
+    ),
+    function_node(
+        "log_scheduled_requested_fn", "log-scheduled-requested-fn", "complete_call",
+        inputs={
+            "status": "scheduled",
+            "appointment_id": "{{node.book_requested_appointment_fn.appointment_id}}",
+        },
+        outputs=[out("status", "STRING")],
+        transitions=[always("confirm_booking_requested")],
+    ),
+    freeform_node(
+        "confirm_booking_requested", "confirm-booking-requested",
+        (
+            "Confirm the booking to the caller: "
+            "{{node.book_requested_appointment_fn.confirmation.doctor}} at "
+            "{{node.book_requested_appointment_fn.confirmation.practice}}, "
+            "{{node.book_requested_appointment_fn.confirmation.when}}, a "
+            "{{node.book_requested_appointment_fn.confirmation.appointment_type}} "
+            "appointment. Read it back naturally and clearly. Then ask if there is "
+            "anything else you can help with. Wait for their response. Once they "
+            "say there is nothing else, thank them and say <|hangup|>."
+        ),
+    ),
+    # The caller named a real doctor AND a real office, but that doctor
+    # isn't at that office ("call 3"). find_requested_doctor_fn already
+    # worked out both a real fix (this doctor's own office) and, if one
+    # exists, a different eligible doctor who really is at the requested
+    # office -- the caller picks between them.
+    question_node(
+        "choose_requested_doctor_option", "choose-requested-doctor-option",
+        "{{node.find_requested_doctor_fn.spoken_response}}",
+        answer_guidelines=(
+            "If the caller wants to stick with "
+            "{{node.find_requested_doctor_fn.option_a_doctor_name}} at their own "
+            "office, respond with the exact integer "
+            "{{node.find_requested_doctor_fn.option_a_doctor_id}}. If they'd rather "
+            "see {{node.find_requested_doctor_fn.option_b_doctor_name}} at the "
+            "office they originally asked for, respond with the exact integer "
+            "{{node.find_requested_doctor_fn.option_b_doctor_id}}. If neither works "
+            "for them, respond with exactly NONE."
+        ),
+        transitions=[
+            equal("choose_requested_doctor_option", "answer", "NONE", "dead_end_no_doctor_choice"),
+            always("resolve_chosen_doctor_fn"),
+        ],
+    ),
+    freeform_node(
+        "dead_end_no_doctor_choice", "dead-end-no-doctor-choice",
+        (
+            "Say exactly: I understand -- let me have someone from our office call "
+            "you back to help find the right fit. Then say <|hangup|>."
+        ),
+    ),
+    function_node(
+        # preferred_practice_id is the ORIGINALLY requested office in both
+        # cases (option A or B) -- find_doctors only pins to it when the
+        # chosen doctor actually practices there, and falls back to that
+        # doctor's own nearest real office otherwise, so this one node
+        # resolves correctly no matter which option the caller picked.
+        "resolve_chosen_doctor_fn", "resolve-chosen-doctor-fn", "find_doctors",
+        inputs={
+            "date_of_birth": "{{node.ask_dob.answer}}",
+            "zip": "{{node.ask_zip.answer}}",
+            "preferred_doctor_id": "{{node.choose_requested_doctor_option.answer}}",
+            "preferred_practice_id": "{{node.find_requested_doctor_fn.requested_practice_id}}",
+        },
+        outputs=[
+            out("status", "STRING"),
+            out("term_urgency", "STRING", nullable=True),
+            out("best_doctor_id", "INTEGER", nullable=True),
+            out("best_practice_id", "INTEGER", nullable=True),
+            out("best_doctor_spoken_label", "STRING", nullable=True),
+            out("best_doctor_name", "STRING", nullable=True),
+            out("spoken_response", "STRING", nullable=True),
+        ],
+        transitions=[
+            equal("resolve_chosen_doctor_fn", "status", "matched", "check_chosen_availability_fn"),
+            equal("resolve_chosen_doctor_fn", "status", "no_eligible_doctor", "dead_end_no_doctor"),
+            always("dead_end_system_error"),
+        ],
+    ),
+    function_node(
+        "check_chosen_availability_fn", "check-chosen-availability-fn", "get_availability",
+        inputs={
+            "doctor_id": "{{node.resolve_chosen_doctor_fn.best_doctor_id}}",
+            "practice_id": "{{node.resolve_chosen_doctor_fn.best_practice_id}}",
+            "urgency": "{{node.resolve_chosen_doctor_fn.term_urgency}}",
+        },
+        outputs=[
+            out("status", "STRING"),
+            out("slots", "CUSTOM", nullable=True, custom_schema=SLOTS_ARRAY_SCHEMA),
+            out("urgent_window_met", "BOOLEAN", nullable=True),
+            out("different_practice_name", "STRING", nullable=True),
+        ],
+        started_message="Let me check {{node.resolve_chosen_doctor_fn.best_doctor_spoken_label}}'s availability.",
+        transitions=[
+            equal("check_chosen_availability_fn", "status", "slots_available", "present_chosen_slots"),
+            equal("check_chosen_availability_fn", "status", "no_slots", "dead_end_no_slots"),
+            always("dead_end_system_error"),
+        ],
+    ),
+    question_node(
+        "present_chosen_slots", "present-chosen-slots",
+        (
+            "Let the caller know you found some openings with "
+            "{{node.resolve_chosen_doctor_fn.best_doctor_name}}. This visit is NOT "
+            "urgent unless urgent_window_met is present and literally the boolean "
+            "false -- if blank, missing, or not present, never mention urgency. Only "
+            "when {{node.check_chosen_availability_fn.urgent_window_met}} is "
+            "explicitly false, first say honestly you could not find anything within "
+            "the next few days for this urgent issue, before listing the soonest "
+            "opening. Read out up to 3 of the soonest options, phrased "
+            "conversationally, never a raw timestamp: "
+            "{{node.check_chosen_availability_fn.slots}}. If "
+            "{{node.check_chosen_availability_fn.different_practice_name}} is not "
+            "blank, these openings are at that office rather than the one just "
+            "discussed -- say so plainly before listing the times."
+        ),
+        answer_guidelines=(
+            "If the caller CLEARLY picks one of the listed times, respond with the "
+            "exact slot_id integer. If they have no preference, respond with the "
+            "slot_id of the soonest slot. Otherwise, respond with exactly NONE."
+        ),
+        transitions=[
+            equal("present_chosen_slots", "answer", "NONE", "dead_end_no_slots"),
+            always("book_chosen_appointment_fn"),
+        ],
+    ),
+    function_node(
+        "book_chosen_appointment_fn", "book-chosen-appointment-fn", "book_appointment",
+        inputs={"slot_id": "{{node.present_chosen_slots.answer}}"},
+        outputs=[
+            out("status", "STRING"),
+            out("appointment_id", "INTEGER", nullable=True),
+            out("confirmation", "CUSTOM", nullable=True, custom_schema=CONFIRMATION_SCHEMA),
+        ],
+        started_message="Great, let me get that booked for you.",
+        transitions=[
+            equal("book_chosen_appointment_fn", "status", "scheduled", "log_scheduled_chosen_fn"),
+            equal("book_chosen_appointment_fn", "status", "slot_taken", "dead_end_no_slots"),
+            always("dead_end_system_error"),
+        ],
+    ),
+    function_node(
+        "log_scheduled_chosen_fn", "log-scheduled-chosen-fn", "complete_call",
+        inputs={
+            "status": "scheduled",
+            "appointment_id": "{{node.book_chosen_appointment_fn.appointment_id}}",
+        },
+        outputs=[out("status", "STRING")],
+        transitions=[always("confirm_booking_chosen")],
+    ),
+    freeform_node(
+        "confirm_booking_chosen", "confirm-booking-chosen",
+        (
+            "Confirm the booking to the caller: "
+            "{{node.book_chosen_appointment_fn.confirmation.doctor}} at "
+            "{{node.book_chosen_appointment_fn.confirmation.practice}}, "
+            "{{node.book_chosen_appointment_fn.confirmation.when}}, a "
+            "{{node.book_chosen_appointment_fn.confirmation.appointment_type}} "
+            "appointment. Read it back naturally and clearly. Then ask if there is "
+            "anything else you can help with. Wait for their response. Once they "
+            "say there is nothing else, thank them and say <|hangup|>."
+        ),
     ),
     question_node(
         "ask_complaint", "ask-complaint",

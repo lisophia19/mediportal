@@ -9,6 +9,7 @@ from datetime import date
 
 from anthropic import Anthropic
 from flask import Blueprint, current_app, jsonify
+from rapidfuzz import fuzz
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
@@ -634,6 +635,35 @@ def find_doctors():
     excluded_doctor_id = coerce_int(payload.get("excluded_doctor_id"))
     excluded_doctor_ids = {excluded_doctor_id} if excluded_doctor_id is not None else set()
 
+    # A caller who named a specific doctor (spec §5.1a) already had that
+    # doctor validated (active, eligible for this term, age-eligible) by
+    # find-doctor-by-name -- this just pins the ranking to them instead of
+    # picking by distance, still via the one code path that resolves a real
+    # practice for a doctor, so the pinned case can never diverge from the
+    # normal case on how a practice gets chosen.
+    preferred_doctor_id = coerce_int(payload.get("preferred_doctor_id"))
+    if preferred_doctor_id is not None:
+        doctor = db.session.get(Doctor, preferred_doctor_id)
+        if doctor is None or not doctor.active:
+            return _no_eligible_doctor_response("not_covered", term, caller_coords)
+        # A caller who named both a doctor AND an office that doctor
+        # actually practices at gets pinned to THAT specific office, not
+        # just whichever of the doctor's offices happens to be nearest --
+        # otherwise a correctly-matched request could still get silently
+        # redirected to a different location than the one asked for.
+        preferred_practice_id = coerce_int(payload.get("preferred_practice_id"))
+        practice = distance = None
+        if preferred_practice_id is not None:
+            practice = next(
+                (dp.practice for dp in doctor.doctor_practices if dp.practice_id == preferred_practice_id),
+                None,
+            )
+        if practice is None:
+            practice, distance = _nearest_practice_for_doctor(doctor, caller_coords)
+        if practice is None:
+            return _no_eligible_doctor_response("not_covered", term, caller_coords)
+        return _find_doctors_response(term, [(doctor, practice, distance)])
+
     # Eager-load doctor -> doctor_practices -> practice to avoid N+1 queries.
     all_eligibility = (
         TermEligibility.query.filter(
@@ -668,7 +698,14 @@ def find_doctors():
         return _no_eligible_doctor_response("not_covered", term, caller_coords)
 
     ranked.sort(key=lambda triple: (triple[2] is None, triple[2] if triple[2] is not None else 0, triple[0].id))
+    return _find_doctors_response(term, ranked)
 
+
+def _find_doctors_response(term, ranked):
+    """The §5.2 "matched" payload, given an already-ranked (doctor, practice,
+    distance) list -- shared by the normal by-issue ranking and the
+    single-doctor pinned case (spec §5.1a), so both build the flat
+    best_doctor_id/best_practice_id fields the exact same way."""
     doctors_payload = [
         {
             "doctor_id": doctor.id,
@@ -700,3 +737,213 @@ def find_doctors():
             "best_doctor_name": top["name"],  # short form, for mentions after the first
         }
     )
+
+
+# --- §5.1a find-doctor-by-name ------------------------------------------
+
+DOCTOR_MATCH_SCORE_FLOOR = 70  # rapidfuzz WRatio; below this, treat as "not named"
+PRACTICE_MATCH_SCORE_FLOOR = 70
+
+_DOCTOR_NAME_EXTRACT_PROMPT = """A caller to an orthopedic practice's phone-booking \
+agent was asked whether they have a specific doctor or office in mind. Extract any \
+doctor name and/or office/location name they mentioned from their answer below. \
+Ignore titles like "Doctor" or "Dr." -- extract just the name itself. If they didn't \
+name a specific doctor, or a specific office, leave that field null. Never guess a \
+name that wasn't actually said.
+
+Caller's answer: "{answer}"
+
+Respond with ONLY JSON, no prose, in exactly this shape:
+{{"doctor_name": "<name or null>", "practice_name": "<name or null>"}}"""
+
+
+def _extract_doctor_and_practice(answer_text):
+    """Returns (doctor_name_or_None, practice_name_or_None) the caller
+    actually said. A transport/parse failure degrades to (None, None) --
+    the endpoint then treats it as "no preference named" and falls back to
+    the normal ranked pick rather than failing the call."""
+    try:
+        prompt = _DOCTOR_NAME_EXTRACT_PROMPT.format(answer=answer_text)
+        parsed = json.loads(_strip_markdown_fence(_claude_text(prompt, max_tokens=300)))
+    except Exception:
+        current_app.logger.exception("doctor/practice name extraction failed")
+        return None, None
+    return parsed.get("doctor_name") or None, parsed.get("practice_name") or None
+
+
+def _best_fuzzy_match(query, candidates, key, floor):
+    """Returns the candidate scoring highest against `query` via WRatio (same
+    fuzzy-matching approach already used for patient first-name matching in
+    §5.3), or None if nothing clears `floor`."""
+    if not query or not candidates:
+        return None
+    scored = max(((fuzz.WRatio(query, key(c)), c) for c in candidates), key=lambda pair: pair[0])
+    score, candidate = scored
+    return candidate if score >= floor else None
+
+
+@routing_bp.post("/find-doctor-by-name")
+@require_agent_key
+def find_doctor_by_name():
+    """A caller who names a specific doctor (optionally with a specific
+    office) bypasses the normal by-issue ranking in find_doctors -- but
+    still needs the SAME eligibility checks (active, treats this term,
+    age-eligible) so a named doctor can't route around them. Three
+    outcomes: resolved to one doctor (matched cleanly, or the name didn't
+    pan out and we're falling back to the normal pick -- either way there
+    is exactly one doctor to proceed with); needs_choice (the doctor is
+    real and eligible but doesn't practice at the requested office, so the
+    caller picks between that doctor's real office and a different eligible
+    doctor who is at the requested office); or no_eligible_doctor (the named
+    doctor doesn't treat this at all, and neither does anyone else)."""
+    payload = get_agent_json()
+    doctor_office_text = (payload.get("doctor_office_text") or "").strip()
+    term_id = coerce_int(payload.get("term_id"))
+    dob_raw = payload.get("date_of_birth")
+    zip_value = payload.get("zip")
+    call_id = payload.get("call_id")
+
+    if not term_id and call_id:
+        call = Call.query.filter_by(vogent_call_id=call_id).first()
+        term_id = call.matched_term_id if call else None
+
+    if not doctor_office_text or not term_id or not dob_raw or not call_id:
+        return (
+            jsonify({"error": "doctor_office_text, term_id, date_of_birth, and call_id are required"}),
+            400,
+        )
+
+    term = db.session.get(Term, term_id)
+    if term is None:
+        return jsonify({"error": "unknown term_id"}), 400
+    dob = parse_iso_date(dob_raw)
+    if dob is None:
+        return jsonify({"error": "date_of_birth must be YYYY-MM-DD"}), 400
+
+    caller_coords = _zip_coords(zip_value)
+    age = _age_from_dob(dob)
+
+    all_eligibility = (
+        TermEligibility.query.filter(TermEligibility.term_id == term.id, TermEligibility.doctor.has(active=True))
+        .options(joinedload(TermEligibility.doctor).joinedload(Doctor.doctor_practices).joinedload(DoctorPractice.practice))
+        .all()
+    )
+    eligible_by_doctor_id = {e.doctor_id: e for e in all_eligibility if e.min_age <= age <= e.max_age}
+    if not eligible_by_doctor_id:
+        reason = "not_covered" if not all_eligibility else "age_restricted"
+        return _no_eligible_doctor_response(reason, term, caller_coords)
+
+    try:
+        doctor_name, practice_name = _extract_doctor_and_practice(doctor_office_text)
+    except Exception:
+        current_app.logger.exception("find-doctor-by-name extraction call failed")
+        doctor_name, practice_name = None, None
+
+    active_doctors = Doctor.query.filter_by(active=True).all()
+    named_doctor = _best_fuzzy_match(
+        doctor_name, active_doctors, lambda d: format_doctor_name(d) or "", DOCTOR_MATCH_SCORE_FLOOR
+    )
+
+    if named_doctor is None or named_doctor.id not in eligible_by_doctor_id:
+        # Either no real doctor name was said, the name didn't match anyone,
+        # or the named doctor exists but doesn't treat this condition --
+        # all three fall back to the normal ranked pick rather than
+        # dead-ending a caller who tried to be specific and helpful.
+        ranked = _rank_eligible_doctors(eligible_by_doctor_id.values(), caller_coords)
+        if not ranked:
+            return _no_eligible_doctor_response("not_covered", term, caller_coords)
+        response = _find_doctors_response(term, ranked)
+        body = response.get_json()
+        note = f"{format_doctor_name(named_doctor)} doesn't treat this" if named_doctor else "I couldn't find a doctor by that name"
+        body["spoken_response"] = f"{note}, so I'll book you with {body['best_doctor_spoken_label']} instead."
+        return jsonify(body)
+
+    # Named doctor is real and eligible. No office named, or it didn't
+    # match a real one -- proceed with just the doctor, same shape and
+    # practice-resolution the normal ranked path already produces.
+    if practice_name is None:
+        practice, distance = _nearest_practice_for_doctor(named_doctor, caller_coords)
+        if practice is None:
+            return _no_eligible_doctor_response("not_covered", term, caller_coords)
+        return _find_doctors_response(term, [(named_doctor, practice, distance)])
+
+    # Fuzzy-match the office against EVERY practice, not just this doctor's
+    # own -- matching only within named_doctor.doctor_practices would make
+    # it structurally impossible to ever detect the mismatch this endpoint
+    # exists to catch.
+    requested_practice = _best_fuzzy_match(
+        practice_name, Practice.query.all(), lambda p: p.name, PRACTICE_MATCH_SCORE_FLOOR
+    )
+    if requested_practice is None:
+        practice, distance = _nearest_practice_for_doctor(named_doctor, caller_coords)
+        if practice is None:
+            return _no_eligible_doctor_response("not_covered", term, caller_coords)
+        return _find_doctors_response(term, [(named_doctor, practice, distance)])
+
+    doctor_is_at_requested_practice = any(
+        dp.practice_id == requested_practice.id for dp in named_doctor.doctor_practices
+    )
+    if doctor_is_at_requested_practice:
+        return _find_doctors_response(term, [(named_doctor, requested_practice, None)])
+
+    # The caller named a real doctor and a real office, but that doctor
+    # isn't at that office ("call 3"). Offer both a real fix: this doctor
+    # at their actual (nearest) office, or a different eligible doctor who
+    # really is at the office the caller asked for.
+    own_practice, own_distance = _nearest_practice_for_doctor(named_doctor, caller_coords)
+    other_doctor = next(
+        (
+            eligibility.doctor
+            for eligibility in eligible_by_doctor_id.values()
+            if eligibility.doctor_id != named_doctor.id
+            and any(dp.practice_id == requested_practice.id for dp in eligibility.doctor.doctor_practices)
+        ),
+        None,
+    )
+
+    option_a_label = _spoken_label(named_doctor, own_practice, own_distance) if own_practice else None
+    option_b_label = _spoken_label(other_doctor, requested_practice, None) if other_doctor else None
+
+    if option_a_label is None:
+        # named_doctor has no seeded practice at all -- shouldn't happen for
+        # an active doctor, but never crash on it.
+        return _no_eligible_doctor_response("not_covered", term, caller_coords)
+
+    if option_b_label:
+        spoken_response = (
+            f"{format_doctor_name(named_doctor)} doesn't see patients at our {requested_practice.name} "
+            f"office. I could book you with {option_a_label}, or with {option_b_label}, who does see "
+            f"patients at {requested_practice.name} for this. Which would you prefer?"
+        )
+    else:
+        spoken_response = (
+            f"{format_doctor_name(named_doctor)} doesn't see patients at our {requested_practice.name} "
+            f"office, but I can book you with {option_a_label}."
+        )
+
+    return jsonify(
+        {
+            "status": "needs_choice",
+            "requested_practice_id": requested_practice.id,
+            "requested_practice_name": requested_practice.name,
+            "option_a_doctor_id": named_doctor.id,
+            "option_a_doctor_name": format_doctor_name(named_doctor),
+            "option_b_doctor_id": other_doctor.id if other_doctor else None,
+            "option_b_doctor_name": format_doctor_name(other_doctor) if other_doctor else None,
+            "spoken_response": spoken_response,
+        }
+    )
+
+
+def _rank_eligible_doctors(eligibilities, caller_coords):
+    """Shared by find_doctors' normal ranking and find_doctor_by_name's
+    fallback -- (doctor, practice, distance) tuples sorted nearest-first,
+    skipping any doctor with no seeded practice."""
+    ranked = []
+    for eligibility in eligibilities:
+        doctor = eligibility.doctor
+        practice, distance = _nearest_practice_for_doctor(doctor, caller_coords)
+        if practice is not None:
+            ranked.append((doctor, practice, distance))
+    ranked.sort(key=lambda triple: (triple[2] is None, triple[2] if triple[2] is not None else 0, triple[0].id))
+    return ranked

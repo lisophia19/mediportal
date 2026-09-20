@@ -137,8 +137,31 @@ FUNCTIONS = [
                     "type": "integer",
                     "description": "Doctor already tried this call (no slots, or caller asked for someone else)",
                 },
+                "preferred_doctor_id": {
+                    "type": "integer",
+                    "description": "Pin to this specific doctor (spec §5.1a) instead of ranking by distance",
+                },
+                "preferred_practice_id": {
+                    "type": "integer",
+                    "description": "Pin to this specific office of the preferred doctor's, if they practice there",
+                },
             },
             ["term_id", "date_of_birth"],
+        ),
+    ),
+    (
+        "find_doctor_by_name",
+        "Resolve a caller-named doctor and/or office to a real, eligible doctor (spec §5.1a).",
+        "/routing/find-doctor-by-name",
+        _schema(
+            {
+                "doctor_office_text": {"type": "string", "description": "Caller's answer naming a doctor/office, verbatim"},
+                "term_id": {"type": "integer"},
+                "date_of_birth": {"type": "string", "description": "YYYY-MM-DD"},
+                "zip": {"type": "string"},
+                "call_id": {"type": "string"},
+            },
+            ["doctor_office_text", "date_of_birth"],
         ),
     ),
     (
