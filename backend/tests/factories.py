@@ -13,7 +13,9 @@ from app.models import (
     Appointment,
     AppointmentSlot,
     Doctor,
+    ImagingSlot,
     Patient,
+    PatientPrerequisite,
     Practice,
     Term,
     TermEligibility,
@@ -42,6 +44,7 @@ def make_practice(session=None, **overrides):
         name=overrides.get("name", f"Test Practice {n}"),
         address=overrides.get("address", f"{n} Test Way"),
         zip=overrides.get("zip", "11566"),
+        has_mri=overrides.get("has_mri", False),
     )
     session.add(practice)
     session.flush()
@@ -120,3 +123,28 @@ def make_appointment(patient, slot, term, session=None, call_id=None):
     session.add(appointment)
     session.flush()
     return appointment
+
+
+def make_imaging_slot(practice, session=None, start_time=None, status="open", modality="MRI"):
+    session = session or db.session
+    start_time = start_time or (datetime.now(timezone.utc) + timedelta(days=1))
+    slot = ImagingSlot(
+        practice_id=practice.id,
+        modality=modality,
+        start_time=start_time,
+        end_time=start_time + timedelta(minutes=20),
+        status=status,
+    )
+    session.add(slot)
+    session.flush()
+    return slot
+
+
+def make_prerequisite(patient, term, session=None, requirement="MRI", satisfied=False):
+    session = session or db.session
+    prerequisite = PatientPrerequisite(
+        patient_id=patient.id, term_id=term.id, requirement=requirement, satisfied=satisfied
+    )
+    session.add(prerequisite)
+    session.flush()
+    return prerequisite

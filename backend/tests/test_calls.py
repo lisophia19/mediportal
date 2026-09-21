@@ -1,6 +1,6 @@
 # Tests for call capture lifecycle (spec §5.7): create -> patch ->
 # complete, idempotent complete, and auth gating.
-from .factories import make_appointment, make_doctor, make_patient, make_practice, make_slot, make_term
+from .factories import make_appointment, make_doctor, make_imaging_slot, make_patient, make_practice, make_slot, make_term
 
 
 def test_requires_agent_key(client):
@@ -201,3 +201,26 @@ def test_create_call_unwraps_vogent_params_envelope(client, agent_headers):
     call = Call.query.filter_by(vogent_call_id="vg_wrapped").first()
     assert call is not None
     assert call.caller_phone == "+15165550142"
+
+
+def test_complete_call_records_imaging_appointment_id(client, db, agent_headers):
+    from app.models import Call, ImagingAppointment
+
+    practice = make_practice(db, has_mri=True)
+    slot = make_imaging_slot(practice, db)
+    patient = make_patient(db)
+    appointment = ImagingAppointment(patient_id=patient.id, slot_id=slot.id, status="scheduled")
+    db.add(appointment)
+    db.commit()
+
+    client.post("/api/v1/calls", headers=agent_headers, json={"vogent_call_id": "vg_imaging_appt"})
+
+    resp = client.post(
+        "/api/v1/calls/vg_imaging_appt/complete",
+        headers=agent_headers,
+        json={"status": "scheduled", "imaging_appointment_id": f"{appointment.id}.000000"},
+    )
+    assert resp.status_code == 200
+
+    call = Call.query.filter_by(vogent_call_id="vg_imaging_appt").first()
+    assert call.imaging_appointment_id == appointment.id

@@ -94,6 +94,8 @@ def complete_call(vogent_call_id):
         call.transcript = body["transcript"]
     if "appointment_id" in body:
         call.appointment_id = coerce_int(body["appointment_id"])
+    if "imaging_appointment_id" in body:
+        call.imaging_appointment_id = coerce_int(body["imaging_appointment_id"])
     call.status = body.get("status", call.status)
     call.ended_at = datetime.now(timezone.utc)
 

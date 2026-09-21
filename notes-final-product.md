@@ -45,9 +45,40 @@ it freely as more requirements surface. Nothing here is committed to or schedule
   needs a duration/label decision that accounts for patient-is-new vs. returning, most
   naturally driven by whether `/patients/lookup` returned `found` vs. created a new
   record.
-- **Onsite-service matching.** A patient needing an X-ray or MRI at the visit should be
-  routed to a practice with `has_xray` / `has_mri`. Data is already modeled; matching
-  logic is not.
+- **Onsite-service matching.** MRI is now modeled and matched: `Practice.has_mri`
+  (ingested from the real "MRI Onsite" column) plus `ImagingSlot`/`ImagingAppointment`
+  and the `imaging.py` blueprint (find-location/availability/book). Still deferred:
+  Xray/PT/OT onsite flags exist in the same source sheet but are unused, and imaging
+  location choice isn't proximity-ranked against the caller's own ZIP (see
+  `find_imaging_location_fn`'s comment in `vogent_flow.py` for why).
+- **Auto-satisfying a prerequisite from a real completion signal.** Right now the
+  *only* way `patient_prerequisites.satisfied` ever flips from false to true is the
+  caller saying "yes" on a phone call (`POST /patients/resolve-prerequisite`) --
+  there is no independent signal telling us an ordered MRI actually happened, so the
+  agent must ask every time the flag is still false, even if the patient truly did
+  get it done through some other channel. A real integration would need real data we
+  don't have yet:
+  - **A cross-system patient identifier** (e.g. an MRN) -- `patients.id` is internal
+    only, with nothing to match against an imaging/EHR vendor's own patient record.
+  - **An order/accession number per prerequisite** -- `patient_prerequisites` has no
+    external reference at all; without one, a patient with two pending orders (e.g.
+    a knee MRI and a hip X-ray) has no reliable way to know which completed report
+    satisfies which requirement.
+  - **A procedure code on the requirement** -- `requirement` is a free-text label
+    ("MRI") today; a real completion message identifies the procedure by code (e.g.
+    CPT), so satisfying the right row means mapping requirement -> code up front.
+  - **The completion event itself** -- typically an HL7 ORU message or a FHIR
+    `DiagnosticReport`, carrying patient MRN + order number + procedure code +
+    completion timestamp + report status, pushed from whichever EHR/imaging/PACS
+    system the practice actually uses (an open question -- see below).
+  - **An authenticated ingestion endpoint on our side** to receive that event and
+    look up the matching prerequisite, mirroring the HMAC pattern already used for
+    the Vogent account-level webhook (`backend/app/blueprints/webhooks.py`).
+  - Note: booking the imaging ourselves (`ImagingAppointment`) is a *scheduled*
+    signal, not a *completed* one -- a no-show is possible, so appointment creation
+    must never be conflated with satisfying the prerequisite.
+  - Ties into the compliance section below: a completion feed is real PHI crossing a
+    vendor boundary and needs its own BAA, same as the LLM/Vogent path.
 - **Clinical restrictions / "For Consideration" fields.** `Provider Info` carries
   free-text restriction notes per provider that the baseline ignores entirely.
 - **Triage beyond hip vs. spine.** Baseline's `needs_triage` branch (§5.1) only fires
@@ -176,3 +207,6 @@ it freely as more requirements surface. Nothing here is committed to or schedule
   sent?
 - Should URGENT complaints ever be scheduled by an agent at all, or always transferred?
 - Who owns the schedule of record, and can we read/write it?
+- Which EHR/imaging/PACS system does the practice use, and can it push completed-order
+  results (HL7 ORU / FHIR `DiagnosticReport`) to us -- needed to auto-clear a clinical
+  prerequisite (e.g. "MRI done") instead of asking the caller every time.

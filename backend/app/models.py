@@ -52,6 +52,9 @@ class Practice(db.Model):
     latitude = db.Column(db.Numeric)
     longitude = db.Column(db.Numeric)
     main_phone = db.Column(db.Text)
+    # From the "MRI Onsite" column (spec: onsite-service matching). Only MRI is modeled 
+    # -- Xray/PT/OT. onsite flags exist in the same sheet but are unused so far.
+    has_mri = db.Column(db.Boolean, nullable=False, default=False)
 
     __table_args__ = (UniqueConstraint("name", "address", name="uq_practice_name_address"),)
 
@@ -233,6 +236,83 @@ class Appointment(db.Model):
     )
 
 
+# --- Imaging (spec: onsite-service matching / prerequisite follow-ups) -------
+#
+# Imaging is booked against a practice's MACHINE, not a physician's calendar
+# -- AppointmentSlot.doctor_id is nullable=False specifically because a
+# doctor visit always has one, which an MRI never does. Modeled as separate
+# slot/appointment tables rather than making doctor_id nullable on the
+# existing ones, so a doctor-visit query can never accidentally match an
+# imaging row (and vice versa) without an explicit join.
+
+
+class ImagingSlot(db.Model):
+    __tablename__ = "imaging_slots"
+
+    id = db.Column(db.Integer, primary_key=True)
+    practice_id = db.Column(db.Integer, db.ForeignKey("practices.id"), nullable=False)
+    modality = db.Column(db.Text, nullable=False)  # "MRI" today; Xray onsite exists in the source data, unused so far
+    start_time = db.Column(db.DateTime(timezone=True), nullable=False)
+    end_time = db.Column(db.DateTime(timezone=True), nullable=False)
+    status = db.Column(db.Text, nullable=False, default="open")
+
+    __table_args__ = (
+        CheckConstraint("status IN ('open', 'held', 'booked')", name="ck_imaging_slot_status"),
+        Index("ix_imaging_slots_practice_modality_status_start", "practice_id", "modality", "status", "start_time"),
+        # Mirrors appointment_slots' uq_appointment_slots_doctor_start_booked:
+        # a practice's machine (one per modality, per the seed data) can't be
+        # double-booked across two different slot rows for the same instant.
+        Index(
+            "uq_imaging_slots_practice_modality_start_booked",
+            "practice_id",
+            "modality",
+            "start_time",
+            unique=True,
+            postgresql_where=db.text("status = 'booked'"),
+        ),
+    )
+
+
+class ImagingAppointment(db.Model):
+    __tablename__ = "imaging_appointments"
+
+    id = db.Column(db.Integer, primary_key=True)
+    patient_id = db.Column(db.Integer, db.ForeignKey("patients.id"), nullable=False)
+    slot_id = db.Column(db.Integer, db.ForeignKey("imaging_slots.id"), nullable=False, unique=True)
+    call_id = db.Column(
+        db.Integer, db.ForeignKey("calls.id", use_alter=True, name="fk_imaging_appointments_call_id")
+    )
+    status = db.Column(db.Text, nullable=False, default="scheduled")
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=_utcnow)
+
+    __table_args__ = (
+        CheckConstraint("status IN ('scheduled', 'cancelled')", name="ck_imaging_appointment_status"),
+    )
+
+
+class PatientPrerequisite(db.Model):
+    """A clinical prerequisite gating a returning patient's next visit (e.g.
+    "needs an MRI before their follow-up can be booked"). Synthetic/demo
+    data -- there is no real system of record for this yet (spec §4 notes),
+    seeded onto one demo patient the same way other synthetic call/booking
+    history is seeded."""
+
+    __tablename__ = "patient_prerequisites"
+
+    id = db.Column(db.Integer, primary_key=True)
+    patient_id = db.Column(db.Integer, db.ForeignKey("patients.id"), nullable=False)
+    # The follow-up term this prerequisite blocks -- not enforced against
+    # what the caller actually says on the call, just what's on file.
+    term_id = db.Column(db.Integer, db.ForeignKey("terms.id"), nullable=False)
+    requirement = db.Column(db.Text, nullable=False)  # "MRI" today; a plain label, not an enum -- only one kind exists yet
+    satisfied = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("patient_id", "term_id", "requirement", name="uq_patient_prerequisite"),
+    )
+
+
 # --- §4.3 Call capture tables ------------------------------------------------
 
 
@@ -249,6 +329,7 @@ class Call(db.Model):
     status = db.Column(db.Text, nullable=False, default="in_progress")
     patient_id = db.Column(db.Integer, db.ForeignKey("patients.id"))
     appointment_id = db.Column(db.Integer, db.ForeignKey("appointments.id"))
+    imaging_appointment_id = db.Column(db.Integer, db.ForeignKey("imaging_appointments.id"))
     transcript = db.Column(JSONB, nullable=False, default=list)
     matched_term_id = db.Column(db.Integer, db.ForeignKey("terms.id"))
     raw_complaint = db.Column(db.Text)

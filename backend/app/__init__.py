@@ -30,6 +30,7 @@ def _register_blueprints(app):
     from .blueprints.appointments import appointments_bp
     from .blueprints.calls import calls_bp
     from .blueprints.dashboard import dashboard_bp
+    from .blueprints.imaging import imaging_bp
     from .blueprints.patients import patients_bp
     from .blueprints.routing import routing_bp
     from .blueprints.webhooks import webhooks_bp
@@ -38,6 +39,7 @@ def _register_blueprints(app):
     app.register_blueprint(patients_bp)
     app.register_blueprint(availability_bp)
     app.register_blueprint(appointments_bp)
+    app.register_blueprint(imaging_bp)
     app.register_blueprint(calls_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)

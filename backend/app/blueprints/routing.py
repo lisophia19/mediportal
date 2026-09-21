@@ -72,10 +72,8 @@ either way."""
 
 
 def _classify_hip_or_spine_answer(question, answer_text):
-    # The answer is one word, but the budget has to leave room for the model
-    # to think first -- too small a cap and the reply is a thinking block
-    # with no text, which reads as UNCLEAR and sends a perfectly clear
-    # caller down the retry path.
+    # max_tokens leaves room to think first -- too small and a thinking-only
+    # reply reads as UNCLEAR, sending a clear answer down the retry path.
     prompt = _TRIAGE_CLASSIFIER_PROMPT.format(question=question, answer=answer_text)
     try:
         verdict = _strip_markdown_fence(_claude_text(prompt, max_tokens=1000)).strip().upper()
@@ -107,11 +105,9 @@ def _zip_coords(zip_value):
 # --- §5.1 match-issue --------------------------------------------------------
 
 
-# Filler words excluded from the pre-filter's word-overlap scoring --
-# without this, a complaint's own connective words can coincidentally
-# exact-match a term's structural text (e.g. "and" in complaint text
-# matching "and" inside the body_part "Foot and Ankle"), spuriously
-# outranking real candidates that only score on the actual clinical word.
+# Excluded from word-overlap scoring -- a complaint's connective words can
+# otherwise exact-match a term's structural text (e.g. "and" in "Foot and
+# Ankle"), outranking real candidates that only score on the clinical word.
 _STOPWORDS = {
     "the", "and", "for", "with", "have", "has", "had", "been", "not",
     "really", "just", "got", "get", "lot", "lately", "sure", "what",
@@ -121,13 +117,10 @@ _STOPWORDS = {
     "please", "i'd", "i'm", "i've", "i'll",
 }
 
-# Words that only describe the act of scheduling, never a reason for the
-# visit -- "I'd like to schedule an appointment, please" strips to nothing
-# once these and _STOPWORDS are removed. Sending a complaint with zero real
-# signal into the LLM classifier is what produced no_match, needs_clarification,
-# and an outright parse error for the identical input across three real calls
-# -- there's nothing to classify. Detect that up front and just ask, the way
-# a real front-desk person would, instead of guessing.
+# Words that describe the act of scheduling, never a reason for the visit --
+# stripped alongside _STOPWORDS to detect zero-signal complaints up front
+# (sending those to the LLM produced no_match/needs_clarification/parse
+# errors for real calls) and just ask, instead of guessing.
 _SCHEDULING_ONLY_WORDS = {
     "schedule", "scheduling", "appointment", "appointments", "want",
     "wanted", "would", "need", "needed", "see", "visit", "doctor",
@@ -141,10 +134,8 @@ NEEDS_REASON_PROMPT = "Sure! Could you tell me a bit about what's bringing you i
 def _candidate_terms(complaint_text):
     """Cheap keyword pre-filter over term/body_part/category/patient_phrasing
     so the LLM prompt stays small (spec §5.1 step 1). Matches whole words,
-    not substrings -- a naive `word in haystack` check let common words like
-    "for" spuriously match inside unrelated term/category text (e.g. "for"
-    is a substring of "Deformity"), crowding out real candidates like
-    Pain-Knee for a real complaint mentioning "for a few months"."""
+    not substrings -- substring matching let "for" spuriously match inside
+    "Deformity", crowding out real candidates."""
     words = {w.strip(".,!?").lower() for w in complaint_text.split() if len(w) > 2} - _STOPWORDS
     terms = Term.query.all()
     scored = []
@@ -165,12 +156,9 @@ def _candidate_terms(complaint_text):
 
 
 def _diversify_by_body_part(scored):
-    """Within each score tier, round-robins across body_part instead of the
-    arbitrary id order Term.query.all() returns -- a vague complaint like
-    "I have pain" ties every Pain-* term at the same score, and raw id
-    order happened to cluster low ids on Back/Neck, pushing Pain-Hip just
-    outside the candidate cutoff and silently breaking hip-vs-spine triage
-    (it needs both body parts to even reach the LLM)."""
+    """Within each score tier, round-robins across body_part instead of raw
+    id order -- id order clustered Back/Neck first, pushing Pain-Hip outside
+    the candidate cutoff and breaking hip-vs-spine triage."""
     tiers = {}
     for score, term in scored:
         tiers.setdefault(score, {}).setdefault(term.body_part, []).append(term)
@@ -223,12 +211,9 @@ def _classify_complaint(complaint_text, candidates):
 
 def _claude_text(prompt, max_tokens):
     """Returns the text of a Claude reply, retrying once if the model spends
-    the whole budget thinking and emits no text block at all.
-
-    Both cases are real: content[0] is not reliably the text block (a
-    thinking block can precede it), and a reply can come back as *only* a
-    thinking block -- which used to raise and 503 the endpoint, dead-ending
-    a live call with "something went wrong on our end"."""
+    the whole budget thinking and emits no text block. content[0] is not
+    reliably the text block -- a thinking block can precede or replace it,
+    which used to 503 the endpoint mid-call."""
     client = _anthropic_client()
     for attempt in range(2):
         response = client.messages.create(
@@ -337,12 +322,9 @@ def match_issue():
     matches = sorted(result.get("matches") or [], key=lambda m: m.get("confidence", 0), reverse=True)
     terms_by_id = {t.id: t for t in candidates}
 
-    # ortho_relevant is the "should we engage at all" signal; confidence
-    # only decides matched vs. needs_clarification/needs_triage below. A
-    # real complaint ("a lot of pain, not sure what's causing it") can be
-    # genuinely orthopedic but too vague to name a specific term -- that
-    # should prompt a clarifying question, not a no_match decline (a real
-    # front-desk person asks "where does it hurt?", they don't hang up).
+    # ortho_relevant is the "should we engage at all" signal; confidence only
+    # decides matched vs. needs_clarification/needs_triage below -- a vague
+    # but genuinely orthopedic complaint should prompt a follow-up, not decline.
     if not result.get("ortho_relevant") or not matches:
         return jsonify({"status": "no_match", "spoken_response": NO_MATCH_RESPONSE})
 
@@ -355,12 +337,9 @@ def match_issue():
     if top.get("confidence", 0) >= MATCH_CONFIDENCE and gap_clears:
         return _matched_response(top, top_term, matches, terms_by_id)
 
-    # Second and final round: the caller has already answered one clarifying
-    # question, so asking again (or declining) is worse than committing to
-    # our best read and letting them correct it at the confirm step. Without
-    # this, any complaint still ambiguous on the retry fell through the
-    # flow's catch-all into a dead end -- a real caller saying "my shoulder
-    # has been aching for a couple of weeks" got told we couldn't help.
+    # Second and final round: commit to our best read rather than asking
+    # again -- the caller already answered once, and letting them correct it
+    # at the confirm step beats falling through to a dead end.
     if final_attempt:
         return _matched_response(top, top_term, matches, terms_by_id)
 
@@ -528,14 +507,22 @@ def _nearest_practice_for_doctor(doctor, caller_coords):
     return primary.practice, None
 
 
+def office_phrase(practice, distance):
+    """"at our <name> office[, about N miles from you]" -- shared by
+    doctor spoken labels here and imaging's location labels
+    (blueprints/imaging.py), so the two never phrase the same fact
+    differently."""
+    phrase = f"at our {practice.name} office"
+    if distance is not None:
+        phrase += f" about {distance:.1f} miles from you"
+    return phrase
+
+
 def _spoken_label(doctor, practice, distance):
     parts = [format_doctor_name(doctor)]
     if doctor.specialty:
         parts.append(f"one of our {doctor.specialty.lower()} specialists")
-    office = f"at our {practice.name} office"
-    if distance is not None:
-        office += f" about {distance:.1f} miles from you"
-    parts.append(office)
+    parts.append(office_phrase(practice, distance))
     return ", ".join(parts)
 
 
@@ -567,6 +554,19 @@ def _directory_redirect_for(term):
     if entry is None:
         return None
     return {"contact": entry.contact, "desk_number": entry.desk_number}
+
+
+def _eligibility_reason_for_doctor(doctor_id, term, age):
+    """The one place doctor+term+age eligibility is decided -- shared by
+    find_doctors' pinned-doctor case and find_doctor_by_name so a named
+    doctor can never bypass the age check. Returns (eligible, reason), where
+    reason is "not_covered" or "age_restricted" when eligible is False."""
+    eligibility = TermEligibility.query.filter_by(term_id=term.id, doctor_id=doctor_id).first()
+    if eligibility is None:
+        return False, "not_covered"
+    if not (eligibility.min_age <= age <= eligibility.max_age):
+        return False, "age_restricted"
+    return True, None
 
 
 def _no_eligible_doctor_response(reason, term, caller_coords):
@@ -635,22 +635,21 @@ def find_doctors():
     excluded_doctor_id = coerce_int(payload.get("excluded_doctor_id"))
     excluded_doctor_ids = {excluded_doctor_id} if excluded_doctor_id is not None else set()
 
-    # A caller who named a specific doctor (spec §5.1a) already had that
-    # doctor validated (active, eligible for this term, age-eligible) by
-    # find-doctor-by-name -- this just pins the ranking to them instead of
-    # picking by distance, still via the one code path that resolves a real
-    # practice for a doctor, so the pinned case can never diverge from the
-    # normal case on how a practice gets chosen.
+    # A caller who named a specific doctor (spec §5.1a) pins the ranking to
+    # them instead of picking by distance, but still runs the REAL
+    # eligibility check -- a patient doesn't know a doctor's age
+    # restrictions, so if they don't qualify we say so rather than silently
+    # booking or swapping doctors.
     preferred_doctor_id = coerce_int(payload.get("preferred_doctor_id"))
     if preferred_doctor_id is not None:
         doctor = db.session.get(Doctor, preferred_doctor_id)
         if doctor is None or not doctor.active:
             return _no_eligible_doctor_response("not_covered", term, caller_coords)
-        # A caller who named both a doctor AND an office that doctor
-        # actually practices at gets pinned to THAT specific office, not
-        # just whichever of the doctor's offices happens to be nearest --
-        # otherwise a correctly-matched request could still get silently
-        # redirected to a different location than the one asked for.
+        eligible, reason = _eligibility_reason_for_doctor(doctor.id, term, age)
+        if not eligible:
+            return _no_eligible_doctor_response(reason, term, caller_coords)
+        # A caller who named both a doctor AND an office they practice at
+        # gets pinned to that specific office, not just the nearest one.
         preferred_practice_id = coerce_int(payload.get("preferred_practice_id"))
         practice = distance = None
         if preferred_practice_id is not None:
@@ -785,17 +784,12 @@ def _best_fuzzy_match(query, candidates, key, floor):
 @routing_bp.post("/find-doctor-by-name")
 @require_agent_key
 def find_doctor_by_name():
-    """A caller who names a specific doctor (optionally with a specific
-    office) bypasses the normal by-issue ranking in find_doctors -- but
-    still needs the SAME eligibility checks (active, treats this term,
-    age-eligible) so a named doctor can't route around them. Three
-    outcomes: resolved to one doctor (matched cleanly, or the name didn't
-    pan out and we're falling back to the normal pick -- either way there
-    is exactly one doctor to proceed with); needs_choice (the doctor is
-    real and eligible but doesn't practice at the requested office, so the
-    caller picks between that doctor's real office and a different eligible
-    doctor who is at the requested office); or no_eligible_doctor (the named
-    doctor doesn't treat this at all, and neither does anyone else)."""
+    """A caller naming a doctor (optionally with an office) bypasses
+    find_doctors' by-issue ranking, but still runs the same eligibility
+    checks. Three outcomes: matched (resolved to one doctor, named or
+    fallback), needs_choice (real/eligible doctor, wrong office -- pick
+    their real office or another eligible doctor at the requested one), or
+    no_eligible_doctor."""
     payload = get_agent_json()
     doctor_office_text = (payload.get("doctor_office_text") or "").strip()
     term_id = coerce_int(payload.get("term_id"))
@@ -845,16 +839,23 @@ def find_doctor_by_name():
     )
 
     if named_doctor is None or named_doctor.id not in eligible_by_doctor_id:
-        # Either no real doctor name was said, the name didn't match anyone,
-        # or the named doctor exists but doesn't treat this condition --
-        # all three fall back to the normal ranked pick rather than
-        # dead-ending a caller who tried to be specific and helpful.
+        # No name matched, or the named doctor isn't eligible -- fall back
+        # to the normal ranked pick rather than dead-ending a helpful
+        # caller. Names the age restriction explicitly when that's the real
+        # reason, since the caller has no way to know a doctor's age rules.
+        if named_doctor is None:
+            note = "I couldn't find a doctor by that name"
+        else:
+            _, named_reason = _eligibility_reason_for_doctor(named_doctor.id, term, age)
+            if named_reason == "age_restricted":
+                note = f"{format_doctor_name(named_doctor)} doesn't see patients your age for this"
+            else:
+                note = f"{format_doctor_name(named_doctor)} doesn't treat this"
         ranked = _rank_eligible_doctors(eligible_by_doctor_id.values(), caller_coords)
         if not ranked:
             return _no_eligible_doctor_response("not_covered", term, caller_coords)
         response = _find_doctors_response(term, ranked)
         body = response.get_json()
-        note = f"{format_doctor_name(named_doctor)} doesn't treat this" if named_doctor else "I couldn't find a doctor by that name"
         body["spoken_response"] = f"{note}, so I'll book you with {body['best_doctor_spoken_label']} instead."
         return jsonify(body)
 

@@ -6,7 +6,7 @@ from ..auth_utils import require_agent_key
 from ..vogent_utils import coerce_int, get_agent_json
 from ..extensions import db
 from ..format_utils import parse_iso_date, serialize_patient
-from ..models import Call, Patient
+from ..models import Call, Patient, PatientPrerequisite, Term
 
 patients_bp = Blueprint("patients", __name__, url_prefix="/api/v1/patients")
 
@@ -26,6 +26,33 @@ def _confirm_prompt(candidate):
     return (
         f"I have a record for a {candidate.first_name} {candidate.last_name} born on "
         "that date -- does that sound right?"
+    )
+
+
+def _pending_prerequisite_payload(patient_id):
+    prerequisite = PatientPrerequisite.query.filter_by(patient_id=patient_id, satisfied=False).first()
+    if prerequisite is None:
+        return None
+    term = db.session.get(Term, prerequisite.term_id)
+    return {
+        "prerequisite_id": prerequisite.id,
+        "requirement": prerequisite.requirement,
+        "term_id": prerequisite.term_id,
+        "term_label": term.term if term else None,
+    }
+
+
+def _found_response(patient):
+    """The §5.3 'found' shape, plus any outstanding clinical prerequisite
+    (spec: prerequisite follow-ups) so the flow can ask about it before
+    booking anything, without a separate round trip right after every
+    lookup/confirm resolves to a real patient."""
+    return jsonify(
+        {
+            "status": "found",
+            "patient": serialize_patient(patient),
+            "pending_prerequisite": _pending_prerequisite_payload(patient.id),
+        }
     )
 
 
@@ -63,7 +90,7 @@ def lookup_patient():
         return jsonify({"status": "ambiguous_unresolved", "spoken_response": AMBIGUOUS_RESPONSE})
 
     if len(candidates) == 1:
-        return jsonify({"status": "found", "patient": serialize_patient(candidates[0])})
+        return _found_response(candidates[0])
 
     # (a) Silent caller-ID match against calls.caller_phone.
     call = None
@@ -73,7 +100,7 @@ def lookup_patient():
     if caller_phone:
         phone_matches = [p for p in candidates if p.phone and p.phone == caller_phone]
         if len(phone_matches) == 1:
-            return jsonify({"status": "found", "patient": serialize_patient(phone_matches[0])})
+            return _found_response(phone_matches[0])
 
     # (b) First-name fuzzy soft-score tiebreak.
     top_candidate = candidates[0]
@@ -86,7 +113,7 @@ def lookup_patient():
         top_score, top_candidate = scored[0]
         runner_up_score = scored[1][0] if len(scored) > 1 else 0
         if top_score >= NAME_SCORE_FLOOR and (top_score - runner_up_score) >= NAME_SCORE_GAP:
-            return jsonify({"status": "found", "patient": serialize_patient(top_candidate)})
+            return _found_response(top_candidate)
 
     # (c) Still tied -- ask the caller to confirm the best-guess candidate.
     return jsonify(
@@ -112,7 +139,7 @@ def confirm_patient():
     patient = db.session.get(Patient, patient_id) if patient_id else None
     if patient is None:
         return jsonify({"status": "not_found"})
-    return jsonify({"status": "found", "patient": serialize_patient(patient)})
+    return _found_response(patient)
 
 
 @patients_bp.post("")
@@ -204,6 +231,33 @@ def update_patient_name():
     return jsonify({"status": "ok", "patient": serialize_patient(patient)})
 
 
+@patients_bp.post("/check-prerequisite")
+@require_agent_key
+def check_prerequisite():
+    """A single shared step the flow can reach after EITHER of §5.3's two
+    "patient found" paths (a direct lookup_patient match, or a
+    confirm_patient readback) -- both already persist patient_id onto the
+    call via update_call, so this resolves it the same way every other
+    late-in-call endpoint does (call_id fallback) rather than needing two
+    separate downstream nodes just because the two paths are two different
+    upstream Vogent nodes."""
+    payload = get_agent_json()
+    patient_id = coerce_int(payload.get("patient_id"))
+    call_id = payload.get("call_id")
+
+    if not patient_id and call_id:
+        call = Call.query.filter_by(vogent_call_id=call_id).first()
+        patient_id = call.patient_id if call else None
+
+    if not patient_id:
+        return jsonify({"error": "patient_id (or call_id) is required"}), 400
+
+    pending = _pending_prerequisite_payload(patient_id)
+    return jsonify(
+        {"status": "has_prerequisite" if pending else "none", "pending_prerequisite": pending}
+    )
+
+
 @patients_bp.post("/update-zip")
 @require_agent_key
 def update_patient_zip():
@@ -229,3 +283,35 @@ def update_patient_zip():
     patient.home_zip = zip_value
     db.session.commit()
     return jsonify({"status": "ok"})
+
+
+@patients_bp.post("/resolve-prerequisite")
+@require_agent_key
+def resolve_prerequisite():
+    """The caller's answer to "have you had that [MRI] done?" (spec:
+    prerequisite follow-ups). YES clears it so the visit they called about
+    can proceed normally; NO routes the flow into imaging booking instead --
+    this endpoint doesn't book anything itself, just reports what's needed."""
+    payload = get_agent_json()
+    prerequisite_id = coerce_int(payload.get("prerequisite_id"))
+    satisfied = str(payload.get("satisfied") or "").strip().upper() in ("YES", "TRUE", "1")
+
+    if not prerequisite_id:
+        return jsonify({"error": "prerequisite_id is required"}), 400
+
+    prerequisite = db.session.get(PatientPrerequisite, prerequisite_id)
+    if prerequisite is None:
+        return jsonify({"error": "unknown prerequisite_id"}), 400
+
+    if satisfied:
+        prerequisite.satisfied = True
+        db.session.commit()
+        return jsonify({"status": "cleared"})
+
+    return jsonify(
+        {
+            "status": "needs_imaging",
+            "modality": prerequisite.requirement,
+            "term_id": prerequisite.term_id,
+        }
+    )

@@ -12,6 +12,14 @@
 #  - Dead-end calls do not call complete_call to record a final status (they
 #    rely on the 15-minute abandoned sweep) -- keeps the node count down for
 #    this first pass.
+#  - check_prerequisite_fn checks a returning patient for ANY unsatisfied
+#    prerequisite, not specifically one tied to what they're calling about
+#    today -- a patient with an old, unrelated pending MRI requirement gets
+#    asked about it even if this call is about something else entirely, and
+#    a "no" ends the call booking that imaging instead of ever reaching
+#    their actual complaint. Real fix is scoping the check against the
+#    call's matched_term_id (or a shared body_part/category), not just
+#    patient_id -- deferred for this first pass (skeptic-flagged).
 import json
 import os
 from pathlib import Path
@@ -191,6 +199,25 @@ CONFIRMATION_SCHEMA = {
     },
 }
 
+PREREQUISITE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "prerequisite_id": {"type": "integer"},
+        "requirement": {"type": "string"},
+        "term_id": {"type": "integer"},
+        "term_label": {"type": "string"},
+    },
+}
+
+IMAGING_CONFIRMATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "modality": {"type": "string"},
+        "practice": {"type": "string"},
+        "when": {"type": "string"},
+    },
+}
+
 GLOBAL_CONTEXT = (
     "You are a scheduling agent for an orthopedic practice (Long Island Bone and "
     "Joint). Speak naturally and warmly, like a real front-desk person. Never say "
@@ -252,7 +279,7 @@ nodes = [
         "save_patient_found", "save-patient-found", "update_call",
         inputs={"patient_id": "{{node.lookup_patient.patient.id}}"},
         outputs=[out("status", "STRING")],
-        transitions=[always("ask_zip")],
+        transitions=[always("check_prerequisite_fn")],
     ),
     question_node(
         "confirm_patient_readback", "confirm-patient-readback",
@@ -279,7 +306,166 @@ nodes = [
         "save_patient_confirmed", "save-patient-confirmed", "update_call",
         inputs={"patient_id": "{{node.confirm_patient_fn.patient.id}}"},
         outputs=[out("status", "STRING")],
-        transitions=[always("ask_zip")],
+        transitions=[always("check_prerequisite_fn")],
+    ),
+    # Clinical prerequisite check (e.g. "needs an MRI before their
+    # follow-up") -- only ever reachable for a RETURNING patient (a brand
+    # new one, via create_patient_fn, skips straight to ask_zip and never
+    # touches this). No explicit inputs: both save_patient_found and
+    # save_patient_confirmed already wrote patient_id onto the call via
+    # update_call, so this resolves it the same way every other
+    # late-in-call endpoint does (call_id fallback) -- letting ONE node
+    # serve both upstream "patient found" paths instead of needing two.
+    function_node(
+        "check_prerequisite_fn", "check-prerequisite-fn", "check_prerequisite",
+        inputs={},
+        outputs=[
+            out("status", "STRING"),
+            out("pending_prerequisite", "CUSTOM", nullable=True, custom_schema=PREREQUISITE_SCHEMA),
+        ],
+        transitions=[
+            equal("check_prerequisite_fn", "status", "has_prerequisite", "ask_prerequisite_done"),
+            always("ask_zip"),
+        ],
+    ),
+    question_node(
+        "ask_prerequisite_done", "ask-prerequisite-done",
+        (
+            "Before we continue, I see a note that you needed to get a "
+            "{{node.check_prerequisite_fn.pending_prerequisite.requirement}} done "
+            "before your follow-up -- have you had that done?"
+        ),
+        answer_guidelines=(
+            "Classify the caller's reply as YES or NO for the answer field only -- "
+            "never say the word YES or NO out loud yourself."
+        ),
+        transitions=[always("resolve_prerequisite_fn")],
+    ),
+    function_node(
+        "resolve_prerequisite_fn", "resolve-prerequisite-fn", "resolve_prerequisite",
+        inputs={
+            "prerequisite_id": "{{node.check_prerequisite_fn.pending_prerequisite.prerequisite_id}}",
+            "satisfied": "{{node.ask_prerequisite_done.answer}}",
+        },
+        outputs=[
+            out("status", "STRING"),
+            out("modality", "STRING", nullable=True),
+        ],
+        transitions=[
+            equal("resolve_prerequisite_fn", "status", "cleared", "ask_zip"),
+            equal("resolve_prerequisite_fn", "status", "needs_imaging", "find_imaging_location_fn"),
+            always("dead_end_system_error"),
+        ],
+    ),
+    # The prerequisite isn't satisfied -- book the imaging instead of the
+    # follow-up. Deliberately ends the call here rather than continuing to
+    # the original visit: real clinical sequencing means the follow-up
+    # can't happen until the imaging is done, so it gets booked in a
+    # separate call after that. Not proximity-ranked against the caller's
+    # ZIP (that's only asked later in the normal flow, and this patient's
+    # own home_zip is out of reach here for the same two-upstream-sources
+    # reason check_prerequisite_fn exists) -- picks any MRI-capable
+    # practice. Real ranking is a reasonable follow-up, not required for
+    # this to work correctly.
+    function_node(
+        "find_imaging_location_fn", "find-imaging-location-fn", "find_imaging_location",
+        inputs={"modality": "{{node.resolve_prerequisite_fn.modality}}"},
+        outputs=[
+            out("status", "STRING"),
+            out("modality", "STRING", nullable=True),
+            out("best_practice_id", "INTEGER", nullable=True),
+            out("best_practice_spoken_label", "STRING", nullable=True),
+            out("spoken_response", "STRING", nullable=True),
+        ],
+        transitions=[
+            equal("find_imaging_location_fn", "status", "matched", "check_imaging_availability_fn"),
+            always("dead_end_no_imaging_location"),
+        ],
+    ),
+    freeform_node(
+        "dead_end_no_imaging_location", "dead-end-no-imaging-location",
+        "Say exactly: {{node.find_imaging_location_fn.spoken_response}} Then say <|hangup|>.",
+    ),
+    function_node(
+        "check_imaging_availability_fn", "check-imaging-availability-fn", "get_imaging_availability",
+        inputs={
+            "practice_id": "{{node.find_imaging_location_fn.best_practice_id}}",
+            "modality": "{{node.resolve_prerequisite_fn.modality}}",
+        },
+        outputs=[
+            out("status", "STRING"),
+            out("slots", "CUSTOM", nullable=True, custom_schema=SLOTS_ARRAY_SCHEMA),
+        ],
+        started_message="Let me check availability at {{node.find_imaging_location_fn.best_practice_spoken_label}}.",
+        transitions=[
+            equal("check_imaging_availability_fn", "status", "slots_available", "present_imaging_slots"),
+            equal("check_imaging_availability_fn", "status", "no_slots", "dead_end_no_imaging_slots"),
+            always("dead_end_system_error"),
+        ],
+    ),
+    freeform_node(
+        "dead_end_no_imaging_slots", "dead-end-no-imaging-slots",
+        (
+            "Say exactly: I'm sorry, I don't have any imaging openings right now -- "
+            "let me have someone from our office call you back to get that scheduled. "
+            "Then say <|hangup|>."
+        ),
+    ),
+    question_node(
+        "present_imaging_slots", "present-imaging-slots",
+        (
+            "Let the caller know you found some openings for their "
+            "{{node.resolve_prerequisite_fn.modality}} at "
+            "{{node.find_imaging_location_fn.best_practice_spoken_label}}. Read out up "
+            "to 3 of the soonest options from this list, phrased conversationally -- "
+            "never read a raw timestamp verbatim: "
+            "{{node.check_imaging_availability_fn.slots}}"
+        ),
+        answer_guidelines=(
+            "If the caller CLEARLY picks one of the listed times, respond with the "
+            "exact slot_id integer of that slot. If they have no preference, respond "
+            "with the slot_id of the soonest slot. If they don't want any of them, "
+            "respond with exactly NONE."
+        ),
+        transitions=[
+            equal("present_imaging_slots", "answer", "NONE", "dead_end_no_imaging_slots"),
+            always("book_imaging_fn"),
+        ],
+    ),
+    function_node(
+        "book_imaging_fn", "book-imaging-fn", "book_imaging",
+        inputs={"slot_id": "{{node.present_imaging_slots.answer}}"},
+        outputs=[
+            out("status", "STRING"),
+            out("imaging_appointment_id", "INTEGER", nullable=True),
+            out("confirmation", "CUSTOM", nullable=True, custom_schema=IMAGING_CONFIRMATION_SCHEMA),
+        ],
+        started_message="Great, let me get that booked for you.",
+        transitions=[
+            equal("book_imaging_fn", "status", "scheduled", "log_scheduled_imaging_fn"),
+            equal("book_imaging_fn", "status", "slot_taken", "dead_end_no_imaging_slots"),
+            always("dead_end_system_error"),
+        ],
+    ),
+    function_node(
+        "log_scheduled_imaging_fn", "log-scheduled-imaging-fn", "complete_call",
+        inputs={
+            "status": "scheduled",
+            "imaging_appointment_id": "{{node.book_imaging_fn.imaging_appointment_id}}",
+        },
+        outputs=[out("status", "STRING")],
+        transitions=[always("confirm_imaging_booking")],
+    ),
+    freeform_node(
+        "confirm_imaging_booking", "confirm-imaging-booking",
+        (
+            "Confirm the booking to the caller: their "
+            "{{node.book_imaging_fn.confirmation.modality}} at "
+            "{{node.book_imaging_fn.confirmation.practice}}, "
+            "{{node.book_imaging_fn.confirmation.when}}. Read it back naturally and "
+            "clearly. Let them know that once that's done, they should call back to "
+            "get their follow-up visit scheduled. Then say <|hangup|>."
+        ),
     ),
     question_node(
         "ask_new_phone", "ask-new-phone",
@@ -405,7 +591,7 @@ nodes = [
         transitions=[
             equal("find_requested_doctor_fn", "status", "matched", "check_requested_availability_fn"),
             equal("find_requested_doctor_fn", "status", "needs_choice", "choose_requested_doctor_option"),
-            equal("find_requested_doctor_fn", "status", "no_eligible_doctor", "dead_end_no_doctor"),
+            equal("find_requested_doctor_fn", "status", "no_eligible_doctor", "dead_end_no_requested_doctor"),
             always("dead_end_system_error"),
         ],
     ),
@@ -547,7 +733,7 @@ nodes = [
         ],
         transitions=[
             equal("resolve_chosen_doctor_fn", "status", "matched", "check_chosen_availability_fn"),
-            equal("resolve_chosen_doctor_fn", "status", "no_eligible_doctor", "dead_end_no_doctor"),
+            equal("resolve_chosen_doctor_fn", "status", "no_eligible_doctor", "dead_end_no_chosen_doctor"),
             always("dead_end_system_error"),
         ],
     ),
@@ -1328,6 +1514,21 @@ nodes = [
     freeform_node(
         "dead_end_no_doctor", "dead-end-no-doctor",
         "Say exactly: {{node.find_doctors_fn.spoken_response}} Then say <|hangup|>.",
+    ),
+    # Separate dead ends per source node: this text is a static template
+    # baked in at flow-build time, not dynamically resolved per call, so a
+    # single shared node can only ever speak ONE specific upstream node's
+    # spoken_response. Reusing dead_end_no_doctor here spoke a blank/broken
+    # reference on every call that reached "no eligible doctor" via the
+    # doctor/office-request path instead of the normal by-issue path --
+    # caught by skeptic review before either of these two saw a live call.
+    freeform_node(
+        "dead_end_no_requested_doctor", "dead-end-no-requested-doctor",
+        "Say exactly: {{node.find_requested_doctor_fn.spoken_response}} Then say <|hangup|>.",
+    ),
+    freeform_node(
+        "dead_end_no_chosen_doctor", "dead-end-no-chosen-doctor",
+        "Say exactly: {{node.resolve_chosen_doctor_fn.spoken_response}} Then say <|hangup|>.",
     ),
     freeform_node(
         "dead_end_ambiguous", "dead-end-ambiguous",

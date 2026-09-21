@@ -7,7 +7,16 @@ from datetime import date, datetime, timezone
 from werkzeug.security import generate_password_hash
 
 from ..extensions import db
-from ..models import Appointment, AppointmentSlot, Call, DirectoryRedirectRule, Patient, TermEligibility, User
+from ..models import (
+    Appointment,
+    AppointmentSlot,
+    Call,
+    DirectoryRedirectRule,
+    Patient,
+    PatientPrerequisite,
+    TermEligibility,
+    User,
+)
 from .geography import ZIP_CENTROIDS
 
 _CALLER_ZIPS = [z for z in ZIP_CENTROIDS if z not in {"11968", "11901", "11787", "11777", "11747"}]
@@ -292,3 +301,24 @@ def seed_calls(patients, terms_by_name):
     db.session.add_all(calls)
     db.session.flush()
     return calls
+
+
+def seed_patient_prerequisites(patients, terms_by_name):
+    """One demo patient with an outstanding MRI prerequisite blocking their
+    knee follow-up -- synthetic, like the rest of this file's demo history,
+    since there is no real system of record for clinical prerequisites yet
+    (see notes-final-product.md). Lets a live call actually exercise the
+    "need an MRI before follow-up" branch instead of it only being
+    theoretical."""
+    patients_by_name = {(p.first_name, p.last_name): p for p in patients}
+    patient = patients_by_name.get(("James", "Whitfield"))
+    term = terms_by_name.get("Injury-Knee")
+    if not patient or not term:
+        return None
+
+    prerequisite = PatientPrerequisite(
+        patient_id=patient.id, term_id=term.id, requirement="MRI", satisfied=False
+    )
+    db.session.add(prerequisite)
+    db.session.flush()
+    return prerequisite

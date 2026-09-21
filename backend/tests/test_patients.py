@@ -3,7 +3,9 @@
 # than the full seed script, per the Phase 1 task instructions.
 from datetime import date
 
-from app.models import Call, Patient
+from app.models import Call, PatientPrerequisite, Patient, Term
+
+from .factories import make_prerequisite
 
 
 def _make_patient(db, **overrides):
@@ -300,3 +302,144 @@ def test_update_patient_name_applies_correction_via_call_id(client, db, agent_he
     assert resp.status_code == 200
     updated = db.get(Patient, patient.id)
     assert (updated.first_name, updated.last_name) == ("Jordan", "Testcaller")
+
+
+def _make_term(db, **overrides):
+    defaults = dict(
+        term="Injury-Knee",
+        body_part="Knee/LE",
+        category="Injury",
+        default_appointment_type="follow_up",
+    )
+    defaults.update(overrides)
+    term = Term(**defaults)
+    db.add(term)
+    db.flush()
+    return term
+
+
+def test_lookup_found_surfaces_pending_prerequisite(client, db, agent_headers):
+    """spec: prerequisite follow-ups -- a returning patient with an
+    outstanding MRI requirement gets it surfaced right on the lookup
+    response, not via a separate round trip."""
+    patient = _make_patient(db)
+    term = _make_term(db)
+    prereq = make_prerequisite(patient, term, db)
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/patients/lookup",
+        json={"last_name": patient.last_name, "date_of_birth": "1991-04-02", "call_id": "vg_prereq1"},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "found"
+    assert body["pending_prerequisite"]["prerequisite_id"] == prereq.id
+    assert body["pending_prerequisite"]["requirement"] == "MRI"
+    assert body["pending_prerequisite"]["term_label"] == "Injury-Knee"
+
+
+def test_lookup_found_no_prerequisite_is_null(client, db, agent_headers):
+    patient = _make_patient(db)
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/patients/lookup",
+        json={"last_name": patient.last_name, "date_of_birth": "1991-04-02", "call_id": "vg_prereq2"},
+        headers=agent_headers,
+    )
+    assert resp.get_json()["pending_prerequisite"] is None
+
+
+def test_resolve_prerequisite_satisfied_clears_it(client, db, agent_headers):
+    patient = _make_patient(db)
+    term = _make_term(db)
+    prereq = make_prerequisite(patient, term, db)
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/patients/resolve-prerequisite",
+        headers=agent_headers,
+        json={"prerequisite_id": prereq.id, "satisfied": "YES"},
+    )
+    assert resp.get_json()["status"] == "cleared"
+    assert db.get(PatientPrerequisite, prereq.id).satisfied is True
+
+
+def test_resolve_prerequisite_not_satisfied_needs_imaging(client, db, agent_headers):
+    patient = _make_patient(db)
+    term = _make_term(db)
+    prereq = make_prerequisite(patient, term, db)
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/patients/resolve-prerequisite",
+        headers=agent_headers,
+        json={"prerequisite_id": prereq.id, "satisfied": "NO"},
+    )
+    body = resp.get_json()
+    assert body["status"] == "needs_imaging"
+    assert body["modality"] == "MRI"
+    assert db.get(PatientPrerequisite, prereq.id).satisfied is False
+
+
+def test_resolve_prerequisite_requires_id(client, agent_headers):
+    resp = client.post(
+        "/api/v1/patients/resolve-prerequisite", headers=agent_headers, json={"satisfied": "YES"}
+    )
+    assert resp.status_code == 400
+
+
+def test_check_prerequisite_via_explicit_patient_id(client, db, agent_headers):
+    patient = _make_patient(db)
+    term = _make_term(db)
+    prereq = make_prerequisite(patient, term, db)
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/patients/check-prerequisite",
+        headers=agent_headers,
+        json={"patient_id": patient.id},
+    )
+    body = resp.get_json()
+    assert body["status"] == "has_prerequisite"
+    assert body["pending_prerequisite"]["prerequisite_id"] == prereq.id
+
+
+def test_check_prerequisite_falls_back_to_call_patient_id(client, db, agent_headers):
+    """Regression test: the flow reaches this step after EITHER of two
+    different upstream "patient found" paths, both of which only persisted
+    patient_id onto the call (not this endpoint directly) -- it must
+    resolve via call_id the same way every other late-in-call endpoint
+    does."""
+    patient = _make_patient(db)
+    term = _make_term(db)
+    make_prerequisite(patient, term, db)
+    call = _make_call(db, vogent_call_id="vg_prereq_fallback")
+    call.patient_id = patient.id
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/patients/check-prerequisite",
+        headers=agent_headers,
+        json={"call_id": "vg_prereq_fallback"},
+    )
+    assert resp.get_json()["status"] == "has_prerequisite"
+
+
+def test_check_prerequisite_none_when_clear(client, db, agent_headers):
+    patient = _make_patient(db)
+    db.commit()
+    resp = client.post(
+        "/api/v1/patients/check-prerequisite",
+        headers=agent_headers,
+        json={"patient_id": patient.id},
+    )
+    body = resp.get_json()
+    assert body["status"] == "none"
+    assert body["pending_prerequisite"] is None
+
+
+def test_check_prerequisite_requires_patient(client, agent_headers):
+    resp = client.post("/api/v1/patients/check-prerequisite", headers=agent_headers, json={})
+    assert resp.status_code == 400

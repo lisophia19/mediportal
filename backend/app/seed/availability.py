@@ -7,7 +7,7 @@ import random
 from datetime import date, datetime, time, timedelta, timezone
 
 from ..extensions import db
-from ..models import Appointment, AppointmentSlot, Call, Term, TermEligibility
+from ..models import Appointment, AppointmentSlot, Call, ImagingAppointment, ImagingSlot, Term, TermEligibility
 
 WINDOW_DAYS = 14
 SLOT_GRID_MINUTES = 20
@@ -48,37 +48,37 @@ def _grid_times(day):
         current += step
 
 
-def _wipe_rolling_window(today):
+def _wipe_rolling_window(today, slot_model, appointment_model, call_fk_column):
     """Deletes slots (and their dependent appointments) from today through
     the end of the rolling window, so re-running regenerates a clean window
-    without touching historical bookings."""
+    without touching historical bookings. Shared by the doctor-visit and
+    imaging generators, which differ only in which models/FK column they
+    touch -- both wipe otherwise-identical rolling windows."""
     window_end = today + timedelta(days=WINDOW_DAYS)
     stale_slot_ids = [
         row.id
-        for row in AppointmentSlot.query.filter(
-            AppointmentSlot.start_time >= today,
-            AppointmentSlot.start_time < window_end,
+        for row in slot_model.query.filter(
+            slot_model.start_time >= today,
+            slot_model.start_time < window_end,
         ).all()
     ]
     if stale_slot_ids:
         stale_appointment_ids = [
             row.id
-            for row in Appointment.query.filter(Appointment.slot_id.in_(stale_slot_ids)).all()
+            for row in appointment_model.query.filter(appointment_model.slot_id.in_(stale_slot_ids)).all()
         ]
         # A call may reference one of these appointments (the demo
         # "scheduled" call, spec §8.4) -- null that reference before
         # deleting so a standalone re-run of just this generator doesn't
         # hit the appointments<->calls FK cycle.
         if stale_appointment_ids:
-            Call.query.filter(Call.appointment_id.in_(stale_appointment_ids)).update(
-                {Call.appointment_id: None}, synchronize_session=False
+            Call.query.filter(call_fk_column.in_(stale_appointment_ids)).update(
+                {call_fk_column: None}, synchronize_session=False
             )
-        Appointment.query.filter(Appointment.slot_id.in_(stale_slot_ids)).delete(
+        appointment_model.query.filter(appointment_model.slot_id.in_(stale_slot_ids)).delete(
             synchronize_session=False
         )
-        AppointmentSlot.query.filter(AppointmentSlot.id.in_(stale_slot_ids)).delete(
-            synchronize_session=False
-        )
+        slot_model.query.filter(slot_model.id.in_(stale_slot_ids)).delete(synchronize_session=False)
         db.session.flush()
 
 
@@ -90,7 +90,7 @@ def generate_availability(doctors_by_name, practices_by_key, patients, rng=None)
     is exactly the 7 routing-eligible doctors (spec §8.1)."""
     rng = rng or random.Random(2026)
     today = date.today()
-    _wipe_rolling_window(today)
+    _wipe_rolling_window(today, AppointmentSlot, Appointment, Call.appointment_id)
 
     practice_by_name = {name: practice for (name, _address), practice in practices_by_key.items()}
 
@@ -149,5 +149,53 @@ def generate_availability(doctors_by_name, practices_by_key, patients, rng=None)
                             appointment_type=appointment_type_by_term_id[term_id],
                             status="scheduled",
                         )
+                    )
+    db.session.flush()
+
+
+IMAGING_MODALITY = "MRI"
+IMAGING_BOOK_FRACTION = 0.3  # lighter than doctor schedules -- imaging has more headroom in practice
+
+
+def generate_imaging_availability(practices_by_key, patients, rng=None):
+    """MRI slots for every MRI-capable practice (spec: onsite-service
+    matching) over the same rolling window as doctor availability. Not tied
+    to any doctor -- imaging is booked against the machine, not a
+    physician's calendar (see models.py's ImagingSlot docstring). Weekdays
+    only, same grid/hours as doctor schedules for simplicity; a lighter
+    pre-booked fraction since there's no real basis for how busy a
+    practice's MRI machine actually is."""
+    rng = rng or random.Random(2026)
+    today = date.today()
+    _wipe_rolling_window(today, ImagingSlot, ImagingAppointment, Call.imaging_appointment_id)
+
+    mri_practices = [p for p in practices_by_key.values() if p.has_mri]
+    if not mri_practices or not patients:
+        return
+
+    for practice in mri_practices:
+        for offset in range(WINDOW_DAYS):
+            day = today + timedelta(days=offset)
+            if day.weekday() >= 5:
+                continue
+            day_slots = [
+                ImagingSlot(
+                    practice_id=practice.id,
+                    modality=IMAGING_MODALITY,
+                    start_time=start,
+                    end_time=end,
+                    status="open",
+                )
+                for start, end in _grid_times(day)
+            ]
+            db.session.add_all(day_slots)
+            db.session.flush()
+
+            for slot in day_slots:
+                if rng.random() < IMAGING_BOOK_FRACTION:
+                    slot.status = "booked"
+                    patient = rng.choice(patients)
+                    db.session.add(
+                        ImagingAppointment(patient_id=patient.id, slot_id=slot.id, status="scheduled")
                     )
     db.session.flush()

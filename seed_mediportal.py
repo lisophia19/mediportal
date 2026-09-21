@@ -23,14 +23,17 @@ from app.models import (
     DirectoryRedirectRule,
     Doctor,
     DoctorPractice,
+    ImagingAppointment,
+    ImagingSlot,
     Patient,
+    PatientPrerequisite,
     Practice,
     Term,
     TermEligibility,
     User,
     ZipCentroid,
 )
-from app.seed.availability import generate_availability
+from app.seed.availability import generate_availability, generate_imaging_availability
 from app.seed.geography import ZIP_CENTROIDS
 from app.seed.spreadsheet import (
     load_workbook,
@@ -44,6 +47,7 @@ from app.seed.synthetic import (
     apply_patient_phrasing,
     seed_calls,
     seed_directory_redirect_rules,
+    seed_patient_prerequisites,
     seed_patients,
     seed_users,
 )
@@ -66,10 +70,12 @@ def _seed_zip_centroids():
 
 
 def _wipe_all():
-    # calls <-> appointments is a genuine FK cycle (spec §4.3) -- null out
-    # both cross-referencing columns before deleting either table.
-    db.session.query(Call).update({Call.appointment_id: None})
+    # calls <-> appointments and calls <-> imaging_appointments are both
+    # genuine FK cycles (spec §4.3) -- null out every cross-referencing
+    # column before deleting any of these tables.
+    db.session.query(Call).update({Call.appointment_id: None, Call.imaging_appointment_id: None})
     db.session.query(Appointment).update({Appointment.call_id: None})
+    db.session.query(ImagingAppointment).update({ImagingAppointment.call_id: None})
     db.session.flush()
 
     # Deleted in FK-dependency order (children before parents).
@@ -77,6 +83,9 @@ def _wipe_all():
         Call,
         Appointment,
         AppointmentSlot,
+        ImagingAppointment,
+        ImagingSlot,
+        PatientPrerequisite,
         DoctorPractice,
         TermEligibility,
         DirectoryRedirectRule,
@@ -143,10 +152,12 @@ def seed_mediportal():
 
         db.session.flush()
         generate_availability(doctors_by_name, practices_by_key, patients)
+        generate_imaging_availability(practices_by_key, patients)
 
         # After availability so the "scheduled" demo call can reference a
         # real pre-booked appointment.
         seed_calls(patients, terms_by_name)
+        seed_patient_prerequisites(patients, terms_by_name)
         seed_users()
 
         db.session.commit()
@@ -155,6 +166,9 @@ def seed_mediportal():
         print(f"Patients: {len(patients)}")
         print(f"Appointment slots: {AppointmentSlot.query.count()}")
         print(f"Appointments (pre-booked + demo): {Appointment.query.count()}")
+        print(f"MRI-capable practices: {sum(1 for p in practices_by_key.values() if p.has_mri)}")
+        print(f"Imaging slots: {ImagingSlot.query.count()}")
+        print(f"Patient prerequisites: {PatientPrerequisite.query.count()}")
         print(f"Calls: {Call.query.count()}")
         print(f"Directory entries: {DirectoryEntry.query.count()}")
         print()

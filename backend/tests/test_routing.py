@@ -689,6 +689,57 @@ def test_find_doctors_preferred_doctor_inactive_is_not_covered(client, db, agent
     assert resp.get_json()["status"] == "no_eligible_doctor"
 
 
+def test_find_doctors_preferred_doctor_not_eligible_for_term(client, db, agent_headers):
+    """Regression test: the pinned-doctor path used to only check
+    doctor.active, silently booking a caller with a real, active doctor
+    who doesn't treat this condition at all. Must run the same eligibility
+    check the normal ranked path enforces, not trust the caller."""
+    term = _make_term(db)
+    practice = _make_practice(db, "Merrick", "11566")
+    doctor = _make_doctor(db, "Alice", "Chen", "Hand & Wrist", practice)
+    # Deliberately no TermEligibility row for (doctor, term).
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/routing/find-doctors",
+        json={
+            "term_id": term.id,
+            "date_of_birth": "1991-04-02",
+            "call_id": "vg_preferred_not_covered",
+            "preferred_doctor_id": doctor.id,
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "no_eligible_doctor"
+    assert body["reason"] == "not_covered"
+
+
+def test_find_doctors_preferred_doctor_wrong_age(client, db, agent_headers):
+    """A patient doesn't know a doctor's age restrictions -- pinning to a
+    named doctor must not bypass age eligibility. Real age (35) outside
+    this doctor's real range (0-17) must be caught, not silently booked."""
+    term = _make_term(db)
+    practice = _make_practice(db, "Merrick", "11566")
+    doctor = _make_doctor(db, "Alice", "Chen", "Pediatrics", practice)
+    db.add(TermEligibility(term_id=term.id, doctor_id=doctor.id, min_age=0, max_age=17))
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/routing/find-doctors",
+        json={
+            "term_id": term.id,
+            "date_of_birth": "1991-04-02",  # ~35 years old
+            "call_id": "vg_preferred_age",
+            "preferred_doctor_id": doctor.id,
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "no_eligible_doctor"
+    assert body["reason"] == "age_restricted"
+
+
 def test_find_doctors_excludes_already_tried_doctor(client, db, agent_headers):
     """A caller who's told the closest doctor has no slots (or explicitly
     asks for someone else) should get the NEXT-best eligible doctor, not
@@ -971,6 +1022,39 @@ def test_find_doctor_by_name_doctor_ineligible_for_term_falls_back(client, db, a
     body = resp.get_json()
     assert body["status"] == "matched"
     assert body["best_doctor_id"] == right_doctor.id
+    assert "doesn't treat this" in body["spoken_response"]
+
+
+def test_find_doctor_by_name_doctor_wrong_age_falls_back_with_specific_reason(
+    client, db, agent_headers, monkeypatch
+):
+    """A patient doesn't know a doctor's age restrictions -- when that's
+    the real reason a named doctor can't see them, say so explicitly
+    rather than the generic (and here inaccurate) "doesn't treat this"."""
+    term = _make_term(db)
+    practice = _make_practice(db, "Melville", "11747", lat=40.79, lon=-73.42)
+    peds_doctor = _make_doctor(db, "Michael", "Fracchia", "Pediatrics", practice)
+    adult_doctor = _make_doctor(db, "Rasel", "Rana", "Spine", practice)
+    db.add(TermEligibility(term_id=term.id, doctor_id=peds_doctor.id, min_age=0, max_age=17))
+    db.add(TermEligibility(term_id=term.id, doctor_id=adult_doctor.id, min_age=1, max_age=100))
+    db.commit()
+    _mock_extraction(monkeypatch, doctor_name="Fracchia")
+
+    resp = client.post(
+        "/api/v1/routing/find-doctor-by-name",
+        json={
+            "doctor_office_text": "Dr. Fracchia",
+            "term_id": term.id,
+            "date_of_birth": "1970-01-01",  # adult -- outside peds_doctor's 0-17 range
+            "call_id": "vg_name_age",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched"
+    assert body["best_doctor_id"] == adult_doctor.id
+    assert "your age" in body["spoken_response"]
+    assert "doesn't treat this" not in body["spoken_response"]
 
 
 def test_find_doctor_by_name_no_name_extracted_falls_back_to_top_ranked(client, db, agent_headers, monkeypatch):

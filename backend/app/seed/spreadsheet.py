@@ -97,8 +97,9 @@ def seed_practices_and_doctor_practices(provider_rows, practice_rows, doctors_by
     """Practices referenced by the LIBJ roster's Practice 1..6 columns only
     (not the full multi-practice directory) -- naturally the 5 real LIBJ
     locations per spec §8.1/§8.3. Same (name, address) de-dup as the
-    original script; onsite-service flags aren't part of the operational
-    schema (spec §4.1 practices table), so they're dropped here."""
+    original script. Only MRI Onsite is carried into the operational
+    schema (imaging booking); the other onsite-service flags (Xray/PT/OT)
+    are still dropped here, unused so far."""
     provider_header = provider_rows[0]
     practice_cols = [
         (
@@ -110,32 +111,42 @@ def seed_practices_and_doctor_practices(provider_rows, practice_rows, doctors_by
 
     practice_header = practice_rows[0]
     main_phone_idx = practice_header.index("Main Phone")
+    mri_idx = practice_header.index("MRI Onsite")
     practices_by_key = {}
 
     def _get_or_create_practice(name, address):
         key = (name, address)
         if key in practices_by_key:
             return practices_by_key[key]
-        for row in practice_rows[1:]:
-            if row[0] == name and row[2] == address:
-                zip_code = str(row[5]) if row[5] else None
-                centroid = ZIP_CENTROIDS.get(zip_code)
-                practice = Practice(
-                    name=name,
-                    address=address,
-                    suite=row[4],
-                    zip=zip_code,
-                    region=row[3],
-                    main_phone=row[main_phone_idx],
-                    latitude=centroid[0] if centroid else None,
-                    longitude=centroid[1] if centroid else None,
-                )
-                db.session.add(practice)
-                db.session.flush()
-                practices_by_key[key] = practice
-                return practice
-        warnings.append(f"no Practice Information match for {name!r} / {address!r}")
-        return None
+        matching_rows = [row for row in practice_rows[1:] if row[0] == name and row[2] == address]
+        if not matching_rows:
+            warnings.append(f"no Practice Information match for {name!r} / {address!r}")
+            return None
+        row = matching_rows[0]
+        # The real sheet has duplicate (name, address) rows for at least one
+        # LIBJ office with a conflicting MRI Onsite value between them (a
+        # real data-quality issue, not a parsing bug -- see
+        # notes-final-product.md). Any 'Y' across the duplicates counts as
+        # onsite MRI capability, rather than depending on which row happens
+        # to be first.
+        has_mri = any(r[mri_idx] == "Y" for r in matching_rows)
+        zip_code = str(row[5]) if row[5] else None
+        centroid = ZIP_CENTROIDS.get(zip_code)
+        practice = Practice(
+            name=name,
+            address=address,
+            suite=row[4],
+            zip=zip_code,
+            region=row[3],
+            main_phone=row[main_phone_idx],
+            latitude=centroid[0] if centroid else None,
+            longitude=centroid[1] if centroid else None,
+            has_mri=has_mri,
+        )
+        db.session.add(practice)
+        db.session.flush()
+        practices_by_key[key] = practice
+        return practice
 
     for row in provider_rows[1:]:
         first, last = row[0], row[1]

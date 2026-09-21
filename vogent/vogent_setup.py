@@ -95,6 +95,68 @@ FUNCTIONS = [
         ),
     ),
     (
+        "check_prerequisite",
+        "Check whether the returning patient has an outstanding clinical prerequisite (e.g. needs an MRI before a follow-up).",
+        "/patients/check-prerequisite",
+        _schema(
+            {
+                "patient_id": {"type": "integer"},
+                "call_id": {"type": "string"},
+            },
+            [],
+        ),
+    ),
+    (
+        "resolve_prerequisite",
+        "Record the caller's answer to whether an outstanding prerequisite has been completed.",
+        "/patients/resolve-prerequisite",
+        _schema(
+            {
+                "prerequisite_id": {"type": "integer"},
+                "satisfied": {"type": "string", "description": "'YES' or 'NO'"},
+            },
+            ["prerequisite_id", "satisfied"],
+        ),
+    ),
+    (
+        "find_imaging_location",
+        "Find the nearest practice offering a given imaging modality (e.g. MRI).",
+        "/imaging/find-location",
+        _schema(
+            {
+                "modality": {"type": "string", "description": "e.g. 'MRI'"},
+                "zip": {"type": "string"},
+            },
+            [],
+        ),
+    ),
+    (
+        "get_imaging_availability",
+        "Get open imaging slots at a practice for a given modality.",
+        "/imaging/availability",
+        _schema(
+            {
+                "practice_id": {"type": "integer"},
+                "modality": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            ["practice_id"],
+        ),
+    ),
+    (
+        "book_imaging",
+        "Book a specific imaging slot for a patient.",
+        "/imaging/book",
+        _schema(
+            {
+                "slot_id": {"type": "integer"},
+                "patient_id": {"type": "integer"},
+                "call_id": {"type": "string"},
+            },
+            ["slot_id"],
+        ),
+    ),
+    (
         "update_patient_name",
         "Apply a caller's correction to the name on their record, in place.",
         "/patients/update-name",
@@ -221,6 +283,8 @@ FUNCTIONS = [
                     "enum": ["scheduled", "no_match", "no_slots", "abandoned", "failed"],
                 },
                 "transcript": {"type": "array", "items": {"type": "object"}},
+                "appointment_id": {"type": "integer"},
+                "imaging_appointment_id": {"type": "integer"},
             },
             ["vogent_call_id"],
         ),
