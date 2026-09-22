@@ -5,6 +5,7 @@
 # tables, not mediportal_* staging tables) and the provider-group scope.
 import re
 
+import gender_guesser.detector as gender_detector
 import openpyxl
 
 from ..extensions import db
@@ -17,6 +18,25 @@ from .geography import ZIP_CENTROIDS
 ORTHO_GROUPS = {"Long Island Bone and Joint (O&C)", "Orlin and Cohen"}
 NON_ORTHO_SPECIALTIES = {"Pain Management", "Physiatrist", "Neurologist"}
 TERMS_SHEET = "Terms Updated"
+
+_GENDER_DETECTOR = gender_detector.Detector(case_sensitive=False)
+_GENDER_MAP = {"male": "male", "mostly_male": "male", "female": "female", "mostly_female": "female"}
+# Real names the detector doesn't recognize (not in its name database) --
+# confirmed by hand rather than guessed. Add an entry here for any future
+# name that falls through to "unknown"/"andy".
+GENDER_OVERRIDES = {}
+
+
+def _infer_gender(first_name):
+    """First name -> "male"/"female"/None. None means genuinely unknown
+    (androgynous or not in the detector's name database), not a coin-flip
+    guess -- a caller's gender preference is a real routing filter, so a
+    wrong guess is worse than admitting we don't know."""
+    given = first_name.split()[0].split("-")[0]
+    if given in GENDER_OVERRIDES:
+        return GENDER_OVERRIDES[given]
+    return _GENDER_MAP.get(_GENDER_DETECTOR.get_gender(given))
+
 
 _AGE_PLUS_RE = re.compile(r"^(\d+)\+$")
 _AGE_RANGE_RE = re.compile(r"^(\d+)-(\d+)$")
@@ -80,12 +100,16 @@ def seed_doctors(provider_rows, warnings):
         if row[specialty_1_idx] in NON_ORTHO_SPECIALTIES:
             continue
         specialties = [s for s in (row[specialty_1_idx], row[specialty_2_idx]) if s]
+        gender = _infer_gender(first)
+        if gender is None:
+            warnings.append(f"could not infer gender for {first} {last} -- left null")
         doctor = Doctor(
             first_name=first,
             last_name=last,
             degree=row[2],
             specialty=" / ".join(specialties) or None,
             npi=row[npi_idx],
+            gender=gender,
         )
         db.session.add(doctor)
         by_name[_provider_key(first, last)] = doctor

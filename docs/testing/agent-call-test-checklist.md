@@ -117,6 +117,35 @@ routing change.
 - [x] **`no_match`** *(passed 2026-09-19 after fix #11)* — migraines (genuinely not orthopedic).
       *Expect:* plain-language decline plus a redirect. `status = no_match`.
 
+### Named doctor / office (call 3)
+
+- [ ] **`named_doctor_right_office`** — names a doctor who is real, eligible, and at an office they actually practice at.
+      *Expect:* pinned directly, no ranking prompt, no age/eligibility bypass.
+- [ ] **`named_doctor_wrong_office`** — names a real doctor at an office they don't practice at.
+      *Expect:* `needs_choice` -- offered that doctor's real office, or a different eligible doctor at the requested office.
+- [ ] **`named_doctor_age_restricted`** — names a doctor who doesn't treat patients this age.
+      *Expect:* honest age-restricted explanation, falls back to an eligible doctor instead of silently booking or swapping without saying why.
+
+### Gender preference
+
+- [ ] **`gender_only_preference`** — states a gender preference, no specific doctor or office.
+      *Expect:* pinned to an eligible doctor of that gender, not the generic by-distance pick.
+- [ ] **`named_doctor_and_gender_mismatch`** — names a real, eligible doctor whose gender doesn't match the stated preference.
+      *Expect:* still books the named doctor, but says honestly that the gender preference wasn't matched rather than silently ignoring it.
+
+### Imaging prerequisite (call 4)
+
+- [ ] **`prerequisite_not_done`** — returning patient (James Whitfield) with a pending MRI prerequisite, says it's not done.
+      *Expect:* routed to imaging location + slot booking; `imaging_appointment_id` set, not `appointment_id`.
+- [ ] **`prerequisite_done`** — same patient, says the MRI is done.
+      *Expect:* prerequisite marked satisfied, flow continues into the normal follow-up doctor booking.
+
+Only one seeded `patient_prerequisites` row exists (James Whitfield). These
+two scenarios share it and are **not independently repeatable** — run
+`prerequisite_not_done` first, then `prerequisite_done` clears it; running
+either again after both finds no pending prerequisite (`status: "none"`),
+which looks like a skip, not a bug. Re-seed (`seed_mediportal.py`) to reset.
+
 ### Resilience
 
 - [x] **`edge_cases`** *(passed 2026-09-19)* — hesitation, odd DOB phrasing, mid-sentence

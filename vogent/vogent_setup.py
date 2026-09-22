@@ -207,13 +207,17 @@ FUNCTIONS = [
                     "type": "integer",
                     "description": "Pin to this specific office of the preferred doctor's, if they practice there",
                 },
+                "preferred_gender": {
+                    "type": "string",
+                    "description": "'male' or 'female' -- narrows ranking to doctors of this gender",
+                },
             },
             ["term_id", "date_of_birth"],
         ),
     ),
     (
         "find_doctor_by_name",
-        "Resolve a caller-named doctor and/or office to a real, eligible doctor (spec §5.1a).",
+        "Resolve a caller-named doctor, office, and/or gender preference to a real, eligible doctor (spec §5.1a).",
         "/routing/find-doctor-by-name",
         _schema(
             {

@@ -574,6 +574,8 @@ def _no_eligible_doctor_response(reason, term, caller_coords):
         base = "Our doctors who treat that only see patients in a different age range than you."
     elif reason == "no_more_doctors":
         base = "That's actually the only doctor we have who treats that."
+    elif reason == "no_gender_match":
+        base = "We don't have a doctor of that gender who treats that, but we do have other doctors available."
     else:
         base = "We don't have a doctor here who treats that."
 
@@ -685,6 +687,16 @@ def find_doctors():
     if not age_eligible:
         return _no_eligible_doctor_response("age_restricted", term, caller_coords)
 
+    # A caller with no specific doctor/office in mind may still state a
+    # gender preference -- doctors with an unrecognized/unknown gender
+    # (gender IS NULL) never match a preference, rather than guessing.
+    preferred_gender = (payload.get("preferred_gender") or "").strip().lower() or None
+    if preferred_gender in ("male", "female"):
+        gender_eligible = [e for e in age_eligible if e.doctor.gender == preferred_gender]
+        if not gender_eligible:
+            return _no_eligible_doctor_response("no_gender_match", term, caller_coords)
+        age_eligible = gender_eligible
+
     ranked = []
     for eligibility in age_eligible:
         doctor = eligibility.doctor
@@ -745,29 +757,36 @@ PRACTICE_MATCH_SCORE_FLOOR = 70
 
 _DOCTOR_NAME_EXTRACT_PROMPT = """A caller to an orthopedic practice's phone-booking \
 agent was asked whether they have a specific doctor or office in mind. Extract any \
-doctor name and/or office/location name they mentioned from their answer below. \
-Ignore titles like "Doctor" or "Dr." -- extract just the name itself. If they didn't \
-name a specific doctor, or a specific office, leave that field null. Never guess a \
-name that wasn't actually said.
+doctor name, office/location name, and doctor-gender preference they mentioned from \
+their answer below. Ignore titles like "Doctor" or "Dr." -- extract just the name \
+itself. If they didn't name a specific doctor, or a specific office, or state a \
+gender preference, leave that field null. Never guess a name or preference that \
+wasn't actually said.
 
 Caller's answer: "{answer}"
 
 Respond with ONLY JSON, no prose, in exactly this shape:
-{{"doctor_name": "<name or null>", "practice_name": "<name or null>"}}"""
+{{"doctor_name": "<name or null>", "practice_name": "<name or null>", \
+"gender_preference": "<'male' or 'female' or null>"}}"""
 
 
-def _extract_doctor_and_practice(answer_text):
-    """Returns (doctor_name_or_None, practice_name_or_None) the caller
-    actually said. A transport/parse failure degrades to (None, None) --
-    the endpoint then treats it as "no preference named" and falls back to
-    the normal ranked pick rather than failing the call."""
+def _extract_doctor_practice_gender(answer_text):
+    """Returns (doctor_name, practice_name, gender_preference), each
+    None if not stated. A transport/parse failure degrades to (None, None,
+    None) -- the endpoint then treats it as "no preference named" and falls
+    back to the normal ranked pick rather than failing the call."""
     try:
         prompt = _DOCTOR_NAME_EXTRACT_PROMPT.format(answer=answer_text)
         parsed = json.loads(_strip_markdown_fence(_claude_text(prompt, max_tokens=300)))
     except Exception:
-        current_app.logger.exception("doctor/practice name extraction failed")
-        return None, None
-    return parsed.get("doctor_name") or None, parsed.get("practice_name") or None
+        current_app.logger.exception("doctor/practice/gender extraction failed")
+        return None, None, None
+    gender = parsed.get("gender_preference")
+    return (
+        parsed.get("doctor_name") or None,
+        parsed.get("practice_name") or None,
+        gender if gender in ("male", "female") else None,
+    )
 
 
 def _best_fuzzy_match(query, candidates, key, floor):
@@ -781,15 +800,32 @@ def _best_fuzzy_match(query, candidates, key, floor):
     return candidate if score >= floor else None
 
 
+def _eligible_doctor_at_practice(eligibilities, practice_id, exclude_doctor_id=None):
+    """First eligible doctor (by TermEligibility rows) who practices at
+    practice_id, skipping exclude_doctor_id if given. Shared by the named-
+    doctor/wrong-office choice and the office-named/no-doctor case, so both
+    find an alternate the exact same way."""
+    return next(
+        (
+            eligibility.doctor
+            for eligibility in eligibilities
+            if eligibility.doctor_id != exclude_doctor_id
+            and any(dp.practice_id == practice_id for dp in eligibility.doctor.doctor_practices)
+        ),
+        None,
+    )
+
+
 @routing_bp.post("/find-doctor-by-name")
 @require_agent_key
 def find_doctor_by_name():
-    """A caller naming a doctor (optionally with an office) bypasses
-    find_doctors' by-issue ranking, but still runs the same eligibility
-    checks. Three outcomes: matched (resolved to one doctor, named or
-    fallback), needs_choice (real/eligible doctor, wrong office -- pick
-    their real office or another eligible doctor at the requested one), or
-    no_eligible_doctor."""
+    """A caller naming a doctor and/or an office bypasses find_doctors'
+    by-issue ranking, but still runs the same eligibility checks. An office
+    named with no doctor pins to whichever eligible doctor is really there
+    (or falls back honestly if none is). Three outcomes: matched (resolved
+    to one doctor, named/office-pinned/fallback), needs_choice (real/
+    eligible doctor, wrong office -- pick their real office or another
+    eligible doctor at the requested one), or no_eligible_doctor."""
     payload = get_agent_json()
     doctor_office_text = (payload.get("doctor_office_text") or "").strip()
     term_id = coerce_int(payload.get("term_id"))
@@ -827,79 +863,116 @@ def find_doctor_by_name():
         reason = "not_covered" if not all_eligibility else "age_restricted"
         return _no_eligible_doctor_response(reason, term, caller_coords)
 
-    try:
-        doctor_name, practice_name = _extract_doctor_and_practice(doctor_office_text)
-    except Exception:
-        current_app.logger.exception("find-doctor-by-name extraction call failed")
-        doctor_name, practice_name = None, None
+    # _extract_doctor_practice_gender never raises -- it degrades to
+    # (None, None, None) internally on any transport/parse failure.
+    doctor_name, practice_name, preferred_gender = _extract_doctor_practice_gender(doctor_office_text)
 
     active_doctors = Doctor.query.filter_by(active=True).all()
     named_doctor = _best_fuzzy_match(
         doctor_name, active_doctors, lambda d: format_doctor_name(d) or "", DOCTOR_MATCH_SCORE_FLOOR
     )
+    # Fuzzy-match the office against EVERY practice, not just a named
+    # doctor's own -- matching only within one doctor's practices would make
+    # it structurally impossible to ever detect a doctor/office mismatch.
+    requested_practice = (
+        _best_fuzzy_match(practice_name, Practice.query.all(), lambda p: p.name, PRACTICE_MATCH_SCORE_FLOOR)
+        if practice_name
+        else None
+    )
+    # A stated gender preference only matters once we're past a specific
+    # named doctor (their gender is whatever it is) -- it narrows the
+    # fallback/office-only candidate pools below.
+    gender_matches = (
+        [e for e in eligible_by_doctor_id.values() if e.doctor.gender == preferred_gender]
+        if preferred_gender
+        else []
+    )
+    gender_unmet = bool(preferred_gender) and not gender_matches
+    fallback_pool = gender_matches or eligible_by_doctor_id.values()
+    named_doctor_ok = named_doctor is not None and named_doctor.id in eligible_by_doctor_id
 
-    if named_doctor is None or named_doctor.id not in eligible_by_doctor_id:
-        # No name matched, or the named doctor isn't eligible -- fall back
-        # to the normal ranked pick rather than dead-ending a helpful
-        # caller. Names the age restriction explicitly when that's the real
-        # reason, since the caller has no way to know a doctor's age rules.
-        if named_doctor is None:
-            note = "I couldn't find a doctor by that name"
+    # Whatever's wrong with a NAMED doctor (not found, or found but doesn't
+    # treat this / wrong age) -- computed once, reused by every branch
+    # below that might still end up substituting a different doctor, so
+    # that reason is never silently dropped just because an office or
+    # gender preference was ALSO stated and handled in the same response.
+    doctor_issue_note = None
+    if named_doctor is not None and not named_doctor_ok:
+        _, named_reason = _eligibility_reason_for_doctor(named_doctor.id, term, age)
+        if named_reason == "age_restricted":
+            doctor_issue_note = f"{format_doctor_name(named_doctor)} doesn't see patients your age for this"
         else:
-            _, named_reason = _eligibility_reason_for_doctor(named_doctor.id, term, age)
-            if named_reason == "age_restricted":
-                note = f"{format_doctor_name(named_doctor)} doesn't see patients your age for this"
-            else:
-                note = f"{format_doctor_name(named_doctor)} doesn't treat this"
-        ranked = _rank_eligible_doctors(eligible_by_doctor_id.values(), caller_coords)
-        if not ranked:
-            return _no_eligible_doctor_response("not_covered", term, caller_coords)
-        response = _find_doctors_response(term, ranked)
-        body = response.get_json()
-        body["spoken_response"] = f"{note}, so I'll book you with {body['best_doctor_spoken_label']} instead."
-        return jsonify(body)
+            doctor_issue_note = f"{format_doctor_name(named_doctor)} doesn't treat this"
+    elif named_doctor is None and doctor_name is not None:
+        doctor_issue_note = "I couldn't find a doctor by that name"
+
+    if not named_doctor_ok:
+        if requested_practice is not None:
+            # An office was named without a (matched, eligible) doctor --
+            # honor that preference directly instead of silently dropping it
+            # into the generic by-distance fallback below. Checked against
+            # every eligible doctor at the office (not the gender-narrowed
+            # fallback_pool) so a real gender mismatch here is caught and
+            # spoken honestly, rather than any of the three preferences
+            # (doctor/office/gender) getting silently dropped for another.
+            doctor_at_practice = _eligible_doctor_at_practice(eligible_by_doctor_id.values(), requested_practice.id)
+            if doctor_at_practice is not None:
+                gender_caveat = (
+                    f"we don't have a doctor of that gender at our {requested_practice.name} office who treats this"
+                    if preferred_gender and doctor_at_practice.gender != preferred_gender
+                    else None
+                )
+                note = _combine_notes(doctor_issue_note, gender_caveat)
+                return _pinned_response(term, doctor_at_practice, requested_practice, None, note)
+            note = _combine_notes(
+                doctor_issue_note,
+                f"we don't have a doctor who treats this at our {requested_practice.name} office",
+                "we don't have a doctor of that gender who treats this either" if gender_unmet else None,
+            )
+            return _ranked_fallback_response(term, fallback_pool, caller_coords, note)
+
+        # No office named either -- fall back to the normal ranked pick
+        # rather than dead-ending a helpful caller.
+        note = _combine_notes(
+            doctor_issue_note,
+            "we don't have a doctor of that gender who treats this" if gender_unmet else None,
+        )
+        return _ranked_fallback_response(term, fallback_pool, caller_coords, note)
 
     # Named doctor is real and eligible. No office named, or it didn't
     # match a real one -- proceed with just the doctor, same shape and
-    # practice-resolution the normal ranked path already produces.
-    if practice_name is None:
-        practice, distance = _nearest_practice_for_doctor(named_doctor, caller_coords)
-        if practice is None:
-            return _no_eligible_doctor_response("not_covered", term, caller_coords)
-        return _find_doctors_response(term, [(named_doctor, practice, distance)])
-
-    # Fuzzy-match the office against EVERY practice, not just this doctor's
-    # own -- matching only within named_doctor.doctor_practices would make
-    # it structurally impossible to ever detect the mismatch this endpoint
-    # exists to catch.
-    requested_practice = _best_fuzzy_match(
-        practice_name, Practice.query.all(), lambda p: p.name, PRACTICE_MATCH_SCORE_FLOOR
+    # practice-resolution the normal ranked path already produces. Still
+    # honest about a stated gender preference this specific doctor doesn't
+    # match -- naming someone doesn't waive a gender preference stated in
+    # the same breath.
+    gender_caveat = _combine_notes(
+        "we don't have a doctor of that gender who treats this"
+        if preferred_gender and named_doctor.gender != preferred_gender
+        else None
     )
     if requested_practice is None:
         practice, distance = _nearest_practice_for_doctor(named_doctor, caller_coords)
         if practice is None:
             return _no_eligible_doctor_response("not_covered", term, caller_coords)
-        return _find_doctors_response(term, [(named_doctor, practice, distance)])
+        return _pinned_response(term, named_doctor, practice, distance, gender_caveat)
 
     doctor_is_at_requested_practice = any(
         dp.practice_id == requested_practice.id for dp in named_doctor.doctor_practices
     )
     if doctor_is_at_requested_practice:
-        return _find_doctors_response(term, [(named_doctor, requested_practice, None)])
+        return _pinned_response(term, named_doctor, requested_practice, None, gender_caveat)
 
     # The caller named a real doctor and a real office, but that doctor
     # isn't at that office ("call 3"). Offer both a real fix: this doctor
     # at their actual (nearest) office, or a different eligible doctor who
-    # really is at the office the caller asked for.
+    # really is at the office the caller asked for. Picks option B from
+    # fallback_pool (gender-matching doctors first, when a preference was
+    # stated and any exist at this office) rather than the full eligible
+    # set, so a gender preference isn't silently dropped just because the
+    # office also didn't resolve to the named doctor.
     own_practice, own_distance = _nearest_practice_for_doctor(named_doctor, caller_coords)
-    other_doctor = next(
-        (
-            eligibility.doctor
-            for eligibility in eligible_by_doctor_id.values()
-            if eligibility.doctor_id != named_doctor.id
-            and any(dp.practice_id == requested_practice.id for dp in eligibility.doctor.doctor_practices)
-        ),
-        None,
+    other_doctor = _eligible_doctor_at_practice(
+        fallback_pool, requested_practice.id, exclude_doctor_id=named_doctor.id
     )
 
     option_a_label = _spoken_label(named_doctor, own_practice, own_distance) if own_practice else None
@@ -910,16 +983,28 @@ def find_doctor_by_name():
         # an active doctor, but never crash on it.
         return _no_eligible_doctor_response("not_covered", term, caller_coords)
 
+    # Said only when NEITHER offered option actually matches a stated
+    # gender preference -- if one does (typically option B, preferred via
+    # fallback_pool above), the caller can just pick it without a caveat.
+    neither_matches_gender = preferred_gender and named_doctor.gender != preferred_gender and (
+        other_doctor is None or other_doctor.gender != preferred_gender
+    )
+    gender_note = (
+        " Neither of those is a doctor of the gender you mentioned, if that still matters to you."
+        if neither_matches_gender
+        else ""
+    )
+
     if option_b_label:
         spoken_response = (
             f"{format_doctor_name(named_doctor)} doesn't see patients at our {requested_practice.name} "
             f"office. I could book you with {option_a_label}, or with {option_b_label}, who does see "
-            f"patients at {requested_practice.name} for this. Which would you prefer?"
+            f"patients at {requested_practice.name} for this.{gender_note} Which would you prefer?"
         )
     else:
         spoken_response = (
             f"{format_doctor_name(named_doctor)} doesn't see patients at our {requested_practice.name} "
-            f"office, but I can book you with {option_a_label}."
+            f"office, but I can book you with {option_a_label}.{gender_note}"
         )
 
     return jsonify(
@@ -948,3 +1033,40 @@ def _rank_eligible_doctors(eligibilities, caller_coords):
             ranked.append((doctor, practice, distance))
     ranked.sort(key=lambda triple: (triple[2] is None, triple[2] if triple[2] is not None else 0, triple[0].id))
     return ranked
+
+
+def _combine_notes(*notes):
+    """Joins every non-None note into one spoken sentence, each capitalized
+    -- so two simultaneously-unmet preferences (e.g. a named doctor who's
+    ineligible AND a gender preference nothing matches) are both said,
+    never silently reduced to just one."""
+    parts = [f"{n[0].upper()}{n[1:]}" for n in notes if n]
+    return ". ".join(parts) or None
+
+
+def _pinned_response(term, doctor, practice, distance, note):
+    """Builds a 'matched' response pinned to (doctor, practice, distance),
+    with `note` prepended to spoken_response when given -- shared by every
+    find_doctor_by_name branch that resolves to one specific doctor while
+    still being honest about a preference that wasn't (fully) honored."""
+    response = _find_doctors_response(term, [(doctor, practice, distance)])
+    if not note:
+        return response
+    body = response.get_json()
+    body["spoken_response"] = f"{note}, so I'll book you with {body['best_doctor_spoken_label']} instead."
+    return jsonify(body)
+
+
+def _ranked_fallback_response(term, eligibilities, caller_coords, note):
+    """Ranks `eligibilities` by distance and returns a 'matched' response,
+    with `note` prepended to spoken_response when given -- the shared tail
+    for every honest fallback in find_doctor_by_name (name not found,
+    doctor ineligible, requested office/gender unavailable)."""
+    ranked = _rank_eligible_doctors(eligibilities, caller_coords)
+    if not ranked:
+        return _no_eligible_doctor_response("not_covered", term, caller_coords)
+    response = _find_doctors_response(term, ranked)
+    body = response.get_json()
+    if note:
+        body["spoken_response"] = f"{note}, so I'll book you with {body['best_doctor_spoken_label']} instead."
+    return jsonify(body)

@@ -30,6 +30,18 @@ it freely as more requirements surface. Nothing here is committed to or schedule
     Gardens ZIP (11706) is actually Bay Shore's real ZIP — seeded as the sheet states,
     not silently corrected, so proximity ranking for that one office is off until the
     practice confirms the real ZIP.
+- **Doctor gender filter is inference, not verified fact.** Unlike every other seeded
+  `Doctor` field, `gender` isn't sourced from the spreadsheet — it's inferred from first
+  name via the `gender-guesser` library at seed time (nullable when unrecognized/
+  ambiguous). A wrong inference silently misroutes a caller's stated gender preference
+  with no confirmation step and no doctor-side correction path; only a seed-time log
+  warning when it can't infer at all. Real product needs either the practice providing
+  real gender-on-file per provider, or a `gender_source`/confidence flag distinguishing
+  "confirmed" from "guessed." Also: gender is extracted from the same LLM call/question
+  as doctor-name and office (`find-doctor-by-name`'s `doctor_office_text`) rather than
+  its own dedicated question — cheaper to build, natural for a caller to say all three
+  in one breath, but couples an identity match and a demographic filter's reliability
+  together; worth separating if gender needs its own confirmation step later.
 - **Urgent scheduling beyond a 3-day window.** Baseline enforces "try to get an urgent
   patient in within 3 days" (widening to 14 with an honest caveat if nothing's sooner —
   spec §5.5). Real behavior for the case that caveat represents — an urgent complaint

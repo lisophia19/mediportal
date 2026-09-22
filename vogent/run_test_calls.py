@@ -139,6 +139,68 @@ SCENARIOS = {
         "Casey Nolan, date of birth February 17th 1993, phone "
         "703-555-0169, ZIP 11530. Take the soonest appointment offered."
     ),
+    # --- named doctor / office (call 3) -----------------------------------
+    "named_doctor_right_office": (
+        "You are a NEW patient with hip pain that's been bothering you for "
+        "weeks. When asked if you have a specific doctor or office in mind, "
+        "say you'd like to see Dr. Fracchia. Don't name an office unless "
+        "asked. Name Terry Boland, date of birth June 9th 1975, phone "
+        "703-555-0171, ZIP 11777. Complete the booking."
+    ),
+    "named_doctor_wrong_office": (
+        "You are a NEW patient with hip pain. When asked if you have a "
+        "specific doctor or office in mind, say you'd like to see Dr. "
+        "Fracchia at the Southampton office. If the agent explains he's not "
+        "at that office and offers you a choice between him at his real "
+        "office or a different doctor who is at Southampton, pick the "
+        "different doctor at Southampton. Name Casey Lindqvist, date of "
+        "birth October 2nd 1980, phone 703-555-0172, ZIP 11968. Complete "
+        "the booking."
+    ),
+    "named_doctor_age_restricted": (
+        "You are a NEW patient calling about your 8 year old child's foot "
+        "pain -- you are calling on the child's behalf but give the "
+        "child's own date of birth when asked. When asked if you have a "
+        "specific doctor in mind, say you'd like to see Dr. Yu. If the "
+        "agent explains Dr. Yu doesn't see patients this age and offers a "
+        "different doctor instead, accept that doctor. Name the patient "
+        "Riley Yu-- no relation, phone 703-555-0173, ZIP 11777, date of "
+        "birth should make them 8 years old today. Complete the booking."
+    ),
+    "gender_only_preference": (
+        "You are a NEW patient with shoulder pain that's been bothering "
+        "you for a couple of weeks. When asked if you have a specific "
+        "doctor or office in mind, say you don't have anyone specific in "
+        "mind, but you'd prefer to see a woman doctor if possible. Name "
+        "Avery Lindqvist, date of birth March 3rd 1988, phone "
+        "703-555-0174, ZIP 11747. Complete the booking."
+    ),
+    "named_doctor_and_gender_mismatch": (
+        "You are a NEW patient with hip pain. When asked if you have a "
+        "specific doctor or office in mind, say you'd like to see Dr. "
+        "Fracchia, but mention you'd have preferred a woman doctor if one "
+        "treated this. If the agent tells you they don't have a doctor of "
+        "that gender who treats this but can still book you with Dr. "
+        "Fracchia, accept that and complete the booking. Name Jordan "
+        "Pruitt, date of birth July 19th 1985, phone 703-555-0175, ZIP "
+        "11747."
+    ),
+    # --- imaging prerequisite (call 4) ------------------------------------
+    "prerequisite_not_done": (
+        "You are a RETURNING patient named James Whitfield, date of birth "
+        "November 19th 1978, phone 516-555-0198, ZIP 11566. You're calling "
+        "for a follow-up on your knee. If asked whether you've had an MRI "
+        "done yet, say no, you haven't had a chance to get it done. Accept "
+        "the first imaging appointment time offered and complete that "
+        "booking."
+    ),
+    "prerequisite_done": (
+        "You are a RETURNING patient named James Whitfield, date of birth "
+        "November 19th 1978, phone 516-555-0198, ZIP 11566. You're calling "
+        "for a follow-up on your knee. If asked whether you've had an MRI "
+        "done yet, say yes, you had it done last week. Continue with the "
+        "normal follow-up booking and complete it."
+    ),
     # --- dead ends -------------------------------------------------------
     "no_match": (
         "You are a NEW patient calling this orthopedic practice about "

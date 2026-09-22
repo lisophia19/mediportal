@@ -556,11 +556,14 @@ nodes = [
         "ask_doctor_preference", "ask-doctor-preference",
         (
             "Before I check availability, did you have a specific doctor or office "
-            "in mind, or would you like me to find the right specialist for you?"
+            "in mind, or a preference for a male or female doctor, or would you like "
+            "me to find the right specialist for you?"
         ),
         answer_guidelines=(
-            "If the caller has no preference, respond with exactly NONE. Otherwise "
-            "respond with what they said about the doctor and/or office, verbatim."
+            "If the caller has no preference of any kind -- no doctor, no office, no "
+            "gender preference -- respond with exactly NONE. Otherwise respond with "
+            "what they said, verbatim, even if it's only a gender preference and no "
+            "doctor or office."
         ),
         transitions=[
             equal("ask_doctor_preference", "answer", "NONE", "find_doctors_fn"),

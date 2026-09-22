@@ -34,9 +34,18 @@ class Doctor(db.Model):
     specialty = db.Column(db.Text)
     npi = db.Column(db.Text)
     active = db.Column(db.Boolean, nullable=False, default=True)
+    # Inferred from first name at seed time (gender-guesser), nullable --
+    # a caller's stated gender preference is a real, legitimate routing
+    # filter, but an unrecognized/ambiguous name means "unknown", not a
+    # guess forced into one bucket.
+    gender = db.Column(db.Text)
 
     doctor_practices = db.relationship("DoctorPractice", back_populates="doctor")
     term_eligibility = db.relationship("TermEligibility", back_populates="doctor")
+
+    __table_args__ = (
+        CheckConstraint("gender IN ('male', 'female')", name="ck_doctor_gender"),
+    )
 
 
 class Practice(db.Model):

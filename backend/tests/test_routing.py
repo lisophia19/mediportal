@@ -600,8 +600,10 @@ def _make_practice(db, name, zip_code, lat=None, lon=None, main_phone="516-555-9
     return practice
 
 
-def _make_doctor(db, first_name, last_name, specialty, practice, active=True):
-    doctor = Doctor(first_name=first_name, last_name=last_name, specialty=specialty, active=active)
+def _make_doctor(db, first_name, last_name, specialty, practice, active=True, gender=None):
+    doctor = Doctor(
+        first_name=first_name, last_name=last_name, specialty=specialty, active=active, gender=gender
+    )
     db.add(doctor)
     db.flush()
     db.add(DoctorPractice(doctor_id=doctor.id, practice_id=practice.id, is_primary=True))
@@ -738,6 +740,83 @@ def test_find_doctors_preferred_doctor_wrong_age(client, db, agent_headers):
     body = resp.get_json()
     assert body["status"] == "no_eligible_doctor"
     assert body["reason"] == "age_restricted"
+
+
+def test_find_doctors_preferred_gender_filters_ranking(client, db, agent_headers):
+    """A caller who prefers a specific gender doctor, with no specific
+    person/office in mind, should only ever be ranked against doctors of
+    that gender."""
+    term = _make_term(db)
+    practice = _make_practice(db, "Merrick", "11566")
+    male_doctor = _make_doctor(db, "Bennett", "Brown", "Hand & Wrist", practice, gender="male")
+    female_doctor = _make_doctor(db, "Alice", "Chen", "Hand & Wrist", practice, gender="female")
+    db.add(TermEligibility(term_id=term.id, doctor_id=male_doctor.id, min_age=1, max_age=100))
+    db.add(TermEligibility(term_id=term.id, doctor_id=female_doctor.id, min_age=1, max_age=100))
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/routing/find-doctors",
+        json={
+            "term_id": term.id,
+            "date_of_birth": "1991-04-02",
+            "call_id": "vg_gender1",
+            "preferred_gender": "female",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched"
+    assert body["best_doctor_id"] == female_doctor.id
+    assert all(d["doctor_id"] == female_doctor.id for d in body["doctors"])
+
+
+def test_find_doctors_preferred_gender_no_match_is_honest(client, db, agent_headers):
+    """No doctor of the requested gender treats this -- an honest
+    no_gender_match dead end, not a false 'nobody treats this' claim (we
+    DO have an eligible doctor, just not of that gender)."""
+    term = _make_term(db)
+    practice = _make_practice(db, "Merrick", "11566")
+    doctor = _make_doctor(db, "Bennett", "Brown", "Hand & Wrist", practice, gender="male")
+    db.add(TermEligibility(term_id=term.id, doctor_id=doctor.id, min_age=1, max_age=100))
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/routing/find-doctors",
+        json={
+            "term_id": term.id,
+            "date_of_birth": "1991-04-02",
+            "call_id": "vg_gender2",
+            "preferred_gender": "female",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "no_eligible_doctor"
+    assert body["reason"] == "no_gender_match"
+
+
+def test_find_doctors_unknown_gender_doctor_never_matches_preference(client, db, agent_headers):
+    """A doctor with no inferred gender (gender IS NULL) must never match a
+    gender preference, rather than being silently treated as a match."""
+    term = _make_term(db)
+    practice = _make_practice(db, "Merrick", "11566")
+    doctor = _make_doctor(db, "Bennett", "Brown", "Hand & Wrist", practice, gender=None)
+    db.add(TermEligibility(term_id=term.id, doctor_id=doctor.id, min_age=1, max_age=100))
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/routing/find-doctors",
+        json={
+            "term_id": term.id,
+            "date_of_birth": "1991-04-02",
+            "call_id": "vg_gender3",
+            "preferred_gender": "male",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "no_eligible_doctor"
+    assert body["reason"] == "no_gender_match"
 
 
 def test_find_doctors_excludes_already_tried_doctor(client, db, agent_headers):
@@ -882,9 +961,12 @@ def test_find_doctors_requires_agent_key(client, db):
 # --- §5.1a find-doctor-by-name --------------------------------------------
 
 
-def _mock_extraction(monkeypatch, doctor_name=None, practice_name=None):
+def _mock_extraction(monkeypatch, doctor_name=None, practice_name=None, gender_preference=None):
     """Mocks the LLM name-extraction call find_doctor_by_name makes."""
-    _mock_llm(monkeypatch, {"doctor_name": doctor_name, "practice_name": practice_name})
+    _mock_llm(
+        monkeypatch,
+        {"doctor_name": doctor_name, "practice_name": practice_name, "gender_preference": gender_preference},
+    )
 
 
 def test_find_doctor_by_name_matches_doctor_no_office_named(client, db, agent_headers, monkeypatch):
@@ -934,6 +1016,247 @@ def test_find_doctor_by_name_matches_doctor_and_office(client, db, agent_headers
     assert body["best_practice_id"] == practice.id
 
 
+def test_find_doctor_by_name_office_only_no_doctor_named_pins_eligible_doctor(
+    client, db, agent_headers, monkeypatch
+):
+    """A caller who names an office but no doctor must have that preference
+    actually applied, not silently ignored in favor of the generic
+    by-distance pick."""
+    term = _make_term(db)
+    melville = _make_practice(db, "Melville", "11747", lat=40.79, lon=-73.42)
+    port_jeff = _make_practice(db, "Port Jefferson", "11777", lat=40.94, lon=-73.07)
+    far_doctor = _make_doctor(db, "Michael", "Fracchia", "Joint Reconstruction", melville)
+    office_doctor = _make_doctor(db, "Brian", "McGinley", "Joint Reconstruction", port_jeff)
+    db.add(TermEligibility(term_id=term.id, doctor_id=far_doctor.id, min_age=1, max_age=100))
+    db.add(TermEligibility(term_id=term.id, doctor_id=office_doctor.id, min_age=1, max_age=100))
+    db.commit()
+    _mock_extraction(monkeypatch, doctor_name=None, practice_name="Port Jefferson")
+
+    resp = client.post(
+        "/api/v1/routing/find-doctor-by-name",
+        json={
+            "doctor_office_text": "I'd like to be seen at your Port Jefferson office",
+            "term_id": term.id,
+            "date_of_birth": "1970-01-01",
+            "call_id": "vg_office_only1",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched"
+    assert body["best_doctor_id"] == office_doctor.id
+    assert body["best_practice_id"] == port_jeff.id
+
+
+def test_find_doctor_by_name_office_only_no_eligible_doctor_there_falls_back_honestly(
+    client, db, agent_headers, monkeypatch
+):
+    """Office named, no doctor -- and nobody eligible practices there.
+    Falls back to the normal ranked pick with a spoken reason naming the
+    requested office, not a generic doctor-name note."""
+    term = _make_term(db)
+    melville = _make_practice(db, "Melville", "11747", lat=40.79, lon=-73.42)
+    port_jeff = _make_practice(db, "Port Jefferson", "11777", lat=40.94, lon=-73.07)
+    only_doctor = _make_doctor(db, "Michael", "Fracchia", "Joint Reconstruction", melville)
+    db.add(TermEligibility(term_id=term.id, doctor_id=only_doctor.id, min_age=1, max_age=100))
+    db.commit()
+    _mock_extraction(monkeypatch, doctor_name=None, practice_name="Port Jefferson")
+
+    resp = client.post(
+        "/api/v1/routing/find-doctor-by-name",
+        json={
+            "doctor_office_text": "I'd like to be seen at your Port Jefferson office",
+            "term_id": term.id,
+            "date_of_birth": "1970-01-01",
+            "call_id": "vg_office_only2",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched"
+    assert body["best_doctor_id"] == only_doctor.id
+    assert "Port Jefferson office" in body["spoken_response"]
+
+
+def test_find_doctor_by_name_office_and_gender_both_named_but_only_office_satisfiable(
+    client, db, agent_headers, monkeypatch
+):
+    """Office AND gender both stated, but the only eligible doctor at the
+    requested office doesn't match the requested gender -- must still book
+    that doctor (office wins) but say honestly that gender wasn't
+    honored, never silently drop the gender preference."""
+    term = _make_term(db)
+    port_jeff = _make_practice(db, "Port Jefferson", "11777", lat=40.94, lon=-73.07)
+    office_doctor = _make_doctor(
+        db, "Brian", "McGinley", "Joint Reconstruction", port_jeff, gender="male"
+    )
+    db.add(TermEligibility(term_id=term.id, doctor_id=office_doctor.id, min_age=1, max_age=100))
+    db.commit()
+    _mock_extraction(monkeypatch, practice_name="Port Jefferson", gender_preference="female")
+
+    resp = client.post(
+        "/api/v1/routing/find-doctor-by-name",
+        json={
+            "doctor_office_text": "I'd like your Port Jefferson office, a woman doctor if possible",
+            "term_id": term.id,
+            "date_of_birth": "1970-01-01",
+            "call_id": "vg_office_gender1",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched"
+    assert body["best_doctor_id"] == office_doctor.id
+    assert "that gender" in body["spoken_response"]
+    assert "Port Jefferson" in body["spoken_response"]
+
+
+def test_find_doctor_by_name_named_doctor_ineligible_at_requested_office_still_explains_why(
+    client, db, agent_headers, monkeypatch
+):
+    """Named doctor AND office both stated, but the named doctor doesn't
+    treat this at all. A substitute at the requested office is found --
+    the substitution reason (named doctor doesn't treat this) must still
+    be spoken, not silently dropped just because the office resolved."""
+    term = _make_term(db)
+    port_jeff = _make_practice(db, "Port Jefferson", "11777", lat=40.94, lon=-73.07)
+    wrong_doctor = _make_doctor(db, "Michael", "Fracchia", "Joint Reconstruction", port_jeff)
+    office_doctor = _make_doctor(db, "Brian", "McGinley", "Joint Reconstruction", port_jeff)
+    db.add(TermEligibility(term_id=term.id, doctor_id=office_doctor.id, min_age=1, max_age=100))
+    db.commit()
+    _mock_extraction(monkeypatch, doctor_name="Fracchia", practice_name="Port Jefferson")
+
+    resp = client.post(
+        "/api/v1/routing/find-doctor-by-name",
+        json={
+            "doctor_office_text": "Dr. Fracchia at your Port Jefferson office",
+            "term_id": term.id,
+            "date_of_birth": "1970-01-01",
+            "call_id": "vg_ineligible_office1",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched"
+    assert body["best_doctor_id"] == office_doctor.id
+    assert "Fracchia" in body["spoken_response"]
+    assert "doesn't treat this" in body["spoken_response"]
+
+
+def test_find_doctor_by_name_named_eligible_doctor_gender_mismatch_still_books_them(
+    client, db, agent_headers, monkeypatch
+):
+    """Caller names a real, eligible doctor AND a gender preference that
+    doctor doesn't match -- still books the named doctor (naming someone
+    is a stronger signal than a general gender preference), but must say
+    so honestly rather than silently ignoring the stated preference."""
+    term = _make_term(db)
+    practice = _make_practice(db, "Melville", "11747", lat=40.79, lon=-73.42)
+    doctor = _make_doctor(db, "Michael", "Fracchia", "Joint Reconstruction", practice, gender="male")
+    db.add(TermEligibility(term_id=term.id, doctor_id=doctor.id, min_age=1, max_age=100))
+    db.commit()
+    _mock_extraction(monkeypatch, doctor_name="Fracchia", gender_preference="female")
+
+    resp = client.post(
+        "/api/v1/routing/find-doctor-by-name",
+        json={
+            "doctor_office_text": "Dr. Fracchia, though I'd prefer a woman doctor",
+            "term_id": term.id,
+            "date_of_birth": "1970-01-01",
+            "call_id": "vg_named_gender_mismatch1",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched"
+    assert body["best_doctor_id"] == doctor.id
+    assert "that gender" in body["spoken_response"]
+
+
+def test_find_doctor_by_name_office_unmet_and_gender_unmet_mentions_both(
+    client, db, agent_headers, monkeypatch
+):
+    """Office named, no doctor eligible there at all, AND gender
+    preference also unmet -- both failures must be spoken, not just one."""
+    term = _make_term(db)
+    melville = _make_practice(db, "Melville", "11747", lat=40.79, lon=-73.42)
+    port_jeff = _make_practice(db, "Port Jefferson", "11777", lat=40.94, lon=-73.07)
+    only_doctor = _make_doctor(db, "Michael", "Fracchia", "Joint Reconstruction", melville, gender="male")
+    db.add(TermEligibility(term_id=term.id, doctor_id=only_doctor.id, min_age=1, max_age=100))
+    db.commit()
+    _mock_extraction(monkeypatch, practice_name="Port Jefferson", gender_preference="female")
+
+    resp = client.post(
+        "/api/v1/routing/find-doctor-by-name",
+        json={
+            "doctor_office_text": "Your Port Jefferson office, a woman doctor please",
+            "term_id": term.id,
+            "date_of_birth": "1970-01-01",
+            "call_id": "vg_both_unmet1",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched"
+    assert body["best_doctor_id"] == only_doctor.id
+    assert "Port Jefferson office" in body["spoken_response"]
+    assert "that gender" in body["spoken_response"]
+
+
+def test_find_doctor_by_name_gender_only_preference_filters_fallback(client, db, agent_headers, monkeypatch):
+    """A caller who states only a gender preference (no doctor, no office
+    named) must have that preference actually applied to the fallback
+    pick, not silently ignored."""
+    term = _make_term(db)
+    practice = _make_practice(db, "Melville", "11747", lat=40.79, lon=-73.42)
+    male_doctor = _make_doctor(db, "Michael", "Fracchia", "Joint Reconstruction", practice, gender="male")
+    female_doctor = _make_doctor(db, "Rachel", "Chen", "Joint Reconstruction", practice, gender="female")
+    db.add(TermEligibility(term_id=term.id, doctor_id=male_doctor.id, min_age=1, max_age=100))
+    db.add(TermEligibility(term_id=term.id, doctor_id=female_doctor.id, min_age=1, max_age=100))
+    db.commit()
+    _mock_extraction(monkeypatch, gender_preference="female")
+
+    resp = client.post(
+        "/api/v1/routing/find-doctor-by-name",
+        json={
+            "doctor_office_text": "No one specific, but I'd prefer a woman doctor",
+            "term_id": term.id,
+            "date_of_birth": "1970-01-01",
+            "call_id": "vg_gender_only1",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched"
+    assert body["best_doctor_id"] == female_doctor.id
+
+
+def test_find_doctor_by_name_gender_preference_unmet_falls_back_honestly(client, db, agent_headers, monkeypatch):
+    """No eligible doctor of the requested gender -- an honest note, still
+    booking with whoever is actually eligible rather than dead-ending."""
+    term = _make_term(db)
+    practice = _make_practice(db, "Melville", "11747", lat=40.79, lon=-73.42)
+    only_doctor = _make_doctor(db, "Michael", "Fracchia", "Joint Reconstruction", practice, gender="male")
+    db.add(TermEligibility(term_id=term.id, doctor_id=only_doctor.id, min_age=1, max_age=100))
+    db.commit()
+    _mock_extraction(monkeypatch, gender_preference="female")
+
+    resp = client.post(
+        "/api/v1/routing/find-doctor-by-name",
+        json={
+            "doctor_office_text": "No one specific, but I'd prefer a woman doctor",
+            "term_id": term.id,
+            "date_of_birth": "1970-01-01",
+            "call_id": "vg_gender_only2",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched"
+    assert body["best_doctor_id"] == only_doctor.id
+    assert "that gender" in body["spoken_response"]
+
+
 def test_find_doctor_by_name_doctor_not_at_requested_office_offers_both_options(
     client, db, agent_headers, monkeypatch
 ):
@@ -967,6 +1290,80 @@ def test_find_doctor_by_name_doctor_not_at_requested_office_offers_both_options(
     assert body["option_a_doctor_id"] == fracchia.id
     assert body["option_b_doctor_id"] == mcginley.id
     assert "Port Jefferson" in body["spoken_response"]
+
+
+def test_find_doctor_by_name_needs_choice_prefers_gender_matching_option_b(
+    client, db, agent_headers, monkeypatch
+):
+    """Doctor+office mismatch AND a gender preference -- when two eligible
+    doctors exist at the requested office, option B must be the one
+    matching the stated gender preference, not just whichever is found
+    first, and no caveat is needed since it's actually satisfied."""
+    term = _make_term(db)
+    melville = _make_practice(db, "Melville", "11747", lat=40.79, lon=-73.42)
+    port_jeff = _make_practice(db, "Port Jefferson", "11777", lat=40.94, lon=-73.07)
+    fracchia = _make_doctor(db, "Michael", "Fracchia", "Joint Reconstruction", melville, gender="male")
+    mcginley = _make_doctor(
+        db, "Brian", "McGinley", "Joint Reconstruction", port_jeff, gender="male"
+    )
+    chen = _make_doctor(db, "Rachel", "Chen", "Joint Reconstruction", port_jeff, gender="female")
+    db.add(TermEligibility(term_id=term.id, doctor_id=fracchia.id, min_age=1, max_age=100))
+    db.add(TermEligibility(term_id=term.id, doctor_id=mcginley.id, min_age=1, max_age=100))
+    db.add(TermEligibility(term_id=term.id, doctor_id=chen.id, min_age=1, max_age=100))
+    db.commit()
+    _mock_extraction(
+        monkeypatch, doctor_name="Fracchia", practice_name="Port Jefferson", gender_preference="female"
+    )
+
+    resp = client.post(
+        "/api/v1/routing/find-doctor-by-name",
+        json={
+            "doctor_office_text": "Dr. Fracchia at your Port Jefferson office, a woman doctor if not him",
+            "term_id": term.id,
+            "date_of_birth": "1970-01-01",
+            "call_id": "vg_choice_gender1",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "needs_choice"
+    assert body["option_b_doctor_id"] == chen.id
+    assert "gender you mentioned" not in body["spoken_response"]
+
+
+def test_find_doctor_by_name_needs_choice_honest_when_gender_unmet_by_both_options(
+    client, db, agent_headers, monkeypatch
+):
+    """Doctor+office mismatch AND a gender preference neither offered
+    option satisfies -- must say so, not silently drop it."""
+    term = _make_term(db)
+    melville = _make_practice(db, "Melville", "11747", lat=40.79, lon=-73.42)
+    port_jeff = _make_practice(db, "Port Jefferson", "11777", lat=40.94, lon=-73.07)
+    fracchia = _make_doctor(db, "Michael", "Fracchia", "Joint Reconstruction", melville, gender="male")
+    mcginley = _make_doctor(
+        db, "Brian", "McGinley", "Joint Reconstruction", port_jeff, gender="male"
+    )
+    db.add(TermEligibility(term_id=term.id, doctor_id=fracchia.id, min_age=1, max_age=100))
+    db.add(TermEligibility(term_id=term.id, doctor_id=mcginley.id, min_age=1, max_age=100))
+    db.commit()
+    _mock_extraction(
+        monkeypatch, doctor_name="Fracchia", practice_name="Port Jefferson", gender_preference="female"
+    )
+
+    resp = client.post(
+        "/api/v1/routing/find-doctor-by-name",
+        json={
+            "doctor_office_text": "Dr. Fracchia at your Port Jefferson office, a woman doctor if not him",
+            "term_id": term.id,
+            "date_of_birth": "1970-01-01",
+            "call_id": "vg_choice_gender2",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "needs_choice"
+    assert body["option_b_doctor_id"] == mcginley.id
+    assert "gender you mentioned" in body["spoken_response"]
 
 
 def test_find_doctor_by_name_mismatch_with_no_alternate_doctor_still_offers_own_office(
