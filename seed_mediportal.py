@@ -57,10 +57,10 @@ XLSX_PATH = Path(__file__).resolve().parent / "data" / "Mediportal Information F
 # Expected counts per spec §8.1 -- printed and checked against the actual
 # seed result so a spreadsheet or parsing change that silently breaks the
 # routing data is caught immediately rather than discovered during a demo.
-EXPECTED_DOCTOR_COUNT = 10
-EXPECTED_ELIGIBLE_DOCTOR_COUNT = 7
-EXPECTED_COVERED_TERM_COUNT = 247
-EXPECTED_UNCOVERED_TERM_COUNT = 49
+EXPECTED_DOCTOR_COUNT = 59
+EXPECTED_ELIGIBLE_DOCTOR_COUNT = 52
+EXPECTED_COVERED_TERM_COUNT = 288
+EXPECTED_UNCOVERED_TERM_COUNT = 8
 
 
 def _seed_zip_centroids():
@@ -107,7 +107,7 @@ def _verify_counts(doctors_by_name, terms_by_name):
     covered_term_ids = {row.term_id for row in eligibility_rows}
 
     checks = [
-        ("Doctors seeded (LIBJ roster)", len(doctors_by_name), EXPECTED_DOCTOR_COUNT),
+        ("Doctors seeded (ortho roster)", len(doctors_by_name), EXPECTED_DOCTOR_COUNT),
         ("Doctors with term_eligibility rows", len(eligible_doctor_ids), EXPECTED_ELIGIBLE_DOCTOR_COUNT),
         ("Distinct terms covered", len(covered_term_ids), EXPECTED_COVERED_TERM_COUNT),
         (

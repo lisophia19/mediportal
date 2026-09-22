@@ -2,9 +2,11 @@
 # auth gating.
 from datetime import datetime, timedelta, timezone
 
-from app.models import Call
+from app.models import AppointmentSlot, Call, DoctorPractice
 
-from .factories import make_doctor, make_practice, make_slot, make_term
+from app.seed.availability import generate_availability
+
+from .factories import make_doctor, make_eligibility, make_patient, make_practice, make_slot, make_term
 
 
 def test_requires_agent_key(client):
@@ -177,3 +179,46 @@ def test_no_office_change_reported_when_preferred_practice_used(client, db, agen
     ).get_json()
 
     assert "different_practice_name" not in body
+
+
+# --- generate_availability / _fallback_template (seed-time logic) ----------
+
+
+def test_generate_availability_skips_non_eligible_doctor(db):
+    """A doctor with real seeded practices but zero term_eligibility rows
+    must get no schedule at all -- the eligibility check has to run before
+    any fallback-template work, not after."""
+    doctor = make_doctor(db, last_name="NoEligibility")
+    practice = make_practice(db)
+    db.add(DoctorPractice(doctor_id=doctor.id, practice_id=practice.id, is_primary=True))
+    db.flush()
+
+    generate_availability(
+        {"NoEligibility, Test": doctor},
+        {(practice.name, practice.address): practice},
+        [make_patient(db)],
+    )
+
+    assert AppointmentSlot.query.filter_by(doctor_id=doctor.id).count() == 0
+
+
+def test_generate_availability_fallback_template_uses_real_practices(db):
+    """An eligible doctor with no hand-curated WEEKLY_TEMPLATES entry must
+    still get bookable slots, generated from their own real seeded
+    practices via the round-robin fallback."""
+    doctor = make_doctor(db, last_name="NoTemplate")
+    term = make_term(db)
+    make_eligibility(term, doctor, db)
+    practice = make_practice(db)
+    db.add(DoctorPractice(doctor_id=doctor.id, practice_id=practice.id, is_primary=True))
+    db.flush()
+
+    generate_availability(
+        {"NoTemplate, Test": doctor},
+        {(practice.name, practice.address): practice},
+        [make_patient(db)],
+    )
+
+    slots = AppointmentSlot.query.filter_by(doctor_id=doctor.id).all()
+    assert slots
+    assert all(slot.practice_id == practice.id for slot in slots)

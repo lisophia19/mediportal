@@ -1,9 +1,8 @@
 # Parses Mediportal Information FINAL.xlsx into the operational schema
-# (spec §4), scoped to Long Island Bone and Joint (O&C) -- spec §8.1. This
-# adapts the original root-level seed_mediportal.py's parsing logic (name
-# matching, age-value parsing, practice de-duplication) rather than
-# rewriting it; the difference is the write target (operational tables, not
-# mediportal_* staging tables) and the LIBJ scope filter.
+# (spec §4). This adapts the original root-level seed_mediportal.py's
+# parsing logic (name matching, age-value parsing, practice de-duplication)
+# rather than rewriting it; the difference is the write target (operational
+# tables, not mediportal_* staging tables) and the provider-group scope.
 import re
 
 import openpyxl
@@ -12,7 +11,11 @@ from ..extensions import db
 from ..models import Doctor, DoctorPractice, DirectoryEntry, Practice, Term, TermEligibility
 from .geography import ZIP_CENTROIDS
 
-LIBJ_GROUP = "Long Island Bone and Joint (O&C)"
+# Orlin & Cohen carries some non-orthopedic specialties (Pain Management,
+# Physiatry, Neurology) alongside its ortho roster -- excluded here. LIBJ doctors are never
+# specialty-filtered (all 10 are ortho).
+ORTHO_GROUPS = {"Long Island Bone and Joint (O&C)", "Orlin and Cohen"}
+NON_ORTHO_SPECIALTIES = {"Pain Management", "Physiatrist", "Neurologist"}
 TERMS_SHEET = "Terms Updated"
 
 _AGE_PLUS_RE = re.compile(r"^(\d+)\+$")
@@ -33,14 +36,8 @@ def _clean(value):
 def _parse_age(cell_value):
     """Cell value -> (min_age, max_age), or None if unrecognized.
     Y/None -> no restriction, "N+" -> floor only, "N-M" -> explicit range.
-
-    Open limitation (see docs/plans/2026-09-13-scheduling-flow-plan.md "Open
-    decisions"): every one of this practice's 7 routing-eligible doctors'
-    real age values is Y or 0-100 -- none has an actual floor/ceiling. The
-    age_restricted routing branch is exercised in code (Phase 1) but has no
-    naturally-occurring trigger in this seed set. Not faked here; seeded as
-    the real data reads.
-    """
+    The expanded (LIBJ + Orlin & Cohen) roster has real floors/ceilings
+    (e.g. "18+", "2-40"), unlike the original LIBJ-only 7."""
     if cell_value in ("Y", "None"):
         return 1, 100
     m = _AGE_PLUS_RE.match(cell_value)
@@ -66,9 +63,10 @@ def _provider_key(first, last):
 
 
 def seed_doctors(provider_rows, warnings):
-    """Providers filtered to the LIBJ group (spec §8.1, all 10). Returns
-    {"Last, First": Doctor} -- the same exact-match key Terms Updated's
-    doctor columns are matched against."""
+    """Providers filtered to the ortho groups (LIBJ + Orlin & Cohen, minus
+    O&C's non-ortho specialties -- spec §8.1). Returns {"Last, First":
+    Doctor} -- the same exact-match key Terms Updated's doctor columns are
+    matched against."""
     header = provider_rows[0]
     group_idx = header.index("Group")
     specialty_1_idx, specialty_2_idx = header.index("Specialty 1"), header.index("Specialty 2")
@@ -77,7 +75,9 @@ def seed_doctors(provider_rows, warnings):
     by_name = {}
     for row in provider_rows[1:]:
         first, last, group = row[0], row[1], row[group_idx]
-        if not first or not last or group != LIBJ_GROUP:
+        if not first or not last or group not in ORTHO_GROUPS:
+            continue
+        if row[specialty_1_idx] in NON_ORTHO_SPECIALTIES:
             continue
         specialties = [s for s in (row[specialty_1_idx], row[specialty_2_idx]) if s]
         doctor = Doctor(
@@ -94,12 +94,11 @@ def seed_doctors(provider_rows, warnings):
 
 
 def seed_practices_and_doctor_practices(provider_rows, practice_rows, doctors_by_name, warnings):
-    """Practices referenced by the LIBJ roster's Practice 1..6 columns only
-    (not the full multi-practice directory) -- naturally the 5 real LIBJ
-    locations per spec §8.1/§8.3. Same (name, address) de-dup as the
-    original script. Only MRI Onsite is carried into the operational
-    schema (imaging booking); the other onsite-service flags (Xray/PT/OT)
-    are still dropped here, unused so far."""
+    """Practices referenced by the seeded roster's Practice 1..6 columns
+    only (not the full multi-practice directory). Same (name, address)
+    de-dup as the original script. Only MRI Onsite is carried into the
+    operational schema (imaging booking); the other onsite-service flags
+    (Xray/PT/OT) are still dropped here, unused so far."""
     provider_header = provider_rows[0]
     practice_cols = [
         (
@@ -178,10 +177,9 @@ def _default_appointment_type(urgency):
 
 def seed_terms_and_eligibility(terms_rows, doctors_by_name, warnings):
     """Full term catalog (all rows in Terms Updated, §4.1) -- terms aren't
-    LIBJ-scoped, only the eligibility rows are (only our 7 routing-eligible
-    doctors' columns produce term_eligibility rows; the other 3 LIBJ
-    providers have no matching column and correctly end up with zero, per
-    spec §8.1)."""
+    scoped to the seeded roster, only the eligibility rows are (a doctor
+    with no matching column, or a name mismatch between sheets, correctly
+    ends up with zero eligibility rows rather than erroring)."""
     header = terms_rows[1]
     doctor_columns = [(i, name) for i, name in enumerate(header) if i >= 4 and name]
 
@@ -214,7 +212,7 @@ def seed_terms_and_eligibility(terms_rows, doctors_by_name, warnings):
                 continue
             doctor = doctors_by_name.get(doctor_name)
             if not doctor:
-                # Column belongs to a doctor outside the LIBJ roster, or a
+                # Column belongs to a doctor outside the seeded roster, or a
                 # name that doesn't exactly match Provider Info -- the
                 # decided exclusion rule (spec §3.2), not an error.
                 continue

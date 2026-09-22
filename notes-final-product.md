@@ -17,13 +17,19 @@ it freely as more requirements surface. Nothing here is committed to or schedule
   (`PT Onsite` / `OT Onsite` flags on `Practice Information`) and in the real practice's
   workflow, but are out of the ortho baseline entirely. Needs its own routing rules —
   PT is usually referral-driven and script-bound, not "pick a therapist by issue."
-- **Pain Management, Physiatry, Joint Reconstruction** and the other non-ortho
-  specialties in `Provider Info`.
-- **Full provider directory.** Baseline seeds all 10 Long Island Bone and Joint
-  providers; the spreadsheet has ~90 across other practice groups. Loading all of them
-  means confronting the data-quality issues `seed_mediportal.py` already logs as
-  warnings (name mismatches between sheets, unrecognized age values, practices that
-  don't resolve).
+- **Pain Management, Physiatry, Neurology.** Still deferred — Orlin & Cohen's
+  providers in these specialties are explicitly excluded from the seed (see below),
+  not just unaddressed.
+- ~~**Full provider directory.**~~ Done — the seed now includes Orlin & Cohen's
+  orthopedic providers alongside the original 10 LIBJ doctors (59 total; O&C's Pain
+  Management/Physiatry/Neurology providers excluded as non-ortho). Still not
+  integrated: HCA (a third `Group` value in `Practice Information`, 4 Staten Island
+  locations, no matching `Provider Info` rows at all — no doctor data to seed from
+  there).
+  - **Data-quality note** (same class as the MRI-duplicate-row issue): the sheet's Kew
+    Gardens ZIP (11706) is actually Bay Shore's real ZIP — seeded as the sheet states,
+    not silently corrected, so proximity ranking for that one office is off until the
+    practice confirms the real ZIP.
 - **Urgent scheduling beyond a 3-day window.** Baseline enforces "try to get an urgent
   patient in within 3 days" (widening to 14 with an honest caveat if nothing's sooner —
   spec §5.5). Real behavior for the case that caveat represents — an urgent complaint
@@ -165,14 +171,10 @@ it freely as more requirements surface. Nothing here is committed to or schedule
 ## Platform and operations
 
 - **Automated AI-to-AI call testing.** Built (`vogent/test_caller_setup.py`,
-  `vogent/run_test_calls.py`, 4 scripted scenarios) but structurally blocked on the
-  current Vogent plan: an agent-to-agent test call needs 2 concurrent call sessions
-  (the test-caller's outbound leg and the mediportal-agent's inbound leg, running
-  simultaneously) but this account's concurrency limit is 1 — every attempt fails
-  instantly as `busy` regardless of which numbers are used. A real human caller never
-  hits this (they only ever need 1 slot). Unblocking this needs a Vogent plan upgrade
-  to a concurrency limit of 2+; until then, testing is manual (call (703) 880-8652
-  directly). The agent and scripts are left in place, unused.
+  `vogent/run_test_calls.py`) and working — the account's concurrency limit was
+  raised past the original blocker, and all 12 baseline scenarios passed as of
+  2026-09-19 (see `docs/testing/agent-call-test-checklist.md`). Call 3 and Call 4
+  each have their own scenarios added but not yet run against a live call.
 - **Deployment.** Docker + AWS EC2 per CLAUDE.md — one container for backend, one for
   frontend, reachable, not on a laptop. Explicitly out of scope for the baseline pass.
 - **CI/CD**, migrations strategy, environment separation.

@@ -852,11 +852,14 @@ comes from the backend.
 
 ## 8. Seed Data
 
-### 8.1 Doctors and terms — Long Island Bone and Joint (O&C), all 10 providers
+### 8.1 Doctors and terms — Long Island Bone and Joint (O&C) + Orlin & Cohen
 
-All values below are taken directly from `Mediportal Information FINAL.xlsx`, filtered
-to the `Group` column `"Long Island Bone and Joint (O&C)"`. This replaces the earlier
-"pick 3 doctors" plan — the practice's real roster is seeded in full.
+Values below are taken directly from `Mediportal Information FINAL.xlsx`. The seed
+originally scoped to `Group == "Long Island Bone and Joint (O&C)"` only (the 10-doctor
+table below); it now also includes `Group == "Orlin and Cohen"` (58 more providers),
+minus that group's non-orthopedic specialties (Pain Management, Physiatrist,
+Neurologist — 9 providers), for **59 doctors total**. This replaces the earlier
+"pick 3 doctors" plan — the combined ortho roster is seeded in full.
 
 > **Note on earlier examples:** sections 3 and 6 above use "Dr. Bennett Brown" /
 > "Alpert" / "Faust" as illustrative, pedagogical doctor names to explain the schema
@@ -864,7 +867,10 @@ to the `Group` column `"Long Island Bone and Joint (O&C)"`. This replaces the ea
 > seed data — the actual roster is below. The mechanism they illustrate (age lives on
 > the relationship, generic response shapes, etc.) is unchanged.
 
-**All 10 providers, seeded into `providers` and `provider_practices`:**
+**The original 10 LIBJ providers** (Orlin & Cohen's 49 aren't reproduced here — too
+large to enumerate by hand; `seed_mediportal.py` generates the full set directly from
+the sheet, same exclusion rule as below), **seeded into `providers` and
+`provider_practices`:**
 
 | Doctor | Degree | Specialty | Practice location(s) | Routing-eligible? |
 |---|---|---|---|---|
@@ -887,13 +893,13 @@ providers (so the directory/dashboard reflects the actual practice) but the rout
 endpoint can never return them. This is the "route only to ortho-relevant ones"
 decision, implemented as a data fact rather than a hardcoded filter.
 
-**Terms and eligibility:** the 7 routing-eligible doctors above collectively cover
-**247 distinct clinical terms** (out of 296 total terms in the sheet) — the full
-intersection of `Terms Updated` rows where at least one of those 7 doctors has a
-non-blank cell. That is the real `term_eligibility` seed set; it is not hand-picked
-and won't be reproduced in full here (`seed_mediportal.py` generates it directly from
-the sheet). A few notable, real properties of this set worth knowing before
-implementation:
+**Terms and eligibility:** the **52 routing-eligible doctors** across the combined
+roster collectively cover **288 distinct clinical terms** (out of 296 total terms in
+the sheet) — the full intersection of `Terms Updated` rows where at least one eligible
+doctor has a non-blank cell. That is the real `term_eligibility` seed set; it is not
+hand-picked and won't be reproduced in full here (`seed_mediportal.py` generates it
+directly from the sheet). A few notable, real properties of this set worth knowing
+before implementation:
 
 - **June Halsey (General/Pediatrics)** is eligible for a broad slice of standard ortho
   terms (e.g. `Arthritis-Elbow`, `Bursitis-Knee`, `Congenital Deformity-Hand`) at age
@@ -901,27 +907,20 @@ implementation:
   not encode a pediatric-only ceiling for her; she is a real, unfiltered routing option
   for any age, not just children. Flagged because it's a real property of the data
   that's easy to assume incorrectly.
-- **All 7 doctors' age values in this practice are `Y` or `0–100`** — i.e., **no doctor
-  in this specific practice has an actual age floor/ceiling in the real data.** The
-  earlier plan's `age_restricted` demo (Fracture-Elbow at 18+) doesn't naturally occur
-  within Long Island Bone and Joint's real roster. The `age_restricted` response shape
-  and backend logic still exist and still matter for the full 20+-doctor directory —
-  this practice's seed data just doesn't happen to exercise that branch. Documented
-  here as an honest seed-data limitation rather than papered over; call it out if the
-  demo needs that branch shown and we can revisit (e.g. seed one doctor outside age
-  norms, clearly labeled as a deliberate seed choice rather than sourced from the row).
-- **The `not_covered` demo is still real and available.** 49 terms in the sheet have
-  **zero** eligible doctors across all 7 (e.g. `Animal Bite of Hand`,
-  `Dupuytren's Contracture`, `Arthroscopy-Wrist`, `Botox`, `EMG- Upper Extremity`) —
-  these are real hand/wrist/upper-extremity procedures this specific practice's
-  ortho-relevant doctors don't perform. Any of these makes a clean `not_covered` demo
-  call.
+- **The original 7 LIBJ doctors' age values are all `Y` or `0–100`** — none has an
+  actual floor/ceiling. The expanded Orlin & Cohen roster changes this: real age
+  floors/ceilings (`7+`, `18+`, `2-40`, `10-85`, etc.) are common across the other 45
+  eligible doctors, so the `age_restricted` branch now has a naturally-occurring
+  trigger in the seed data (no synthetic doctor needed to exercise it).
+- **The `not_covered` demo is still real and available.** 8 terms in the sheet have
+  **zero** eligible doctors across all 52 — a real, if now much smaller, set of
+  procedures no ortho-relevant doctor in the combined roster performs.
 
 Each term also gets 3–6 hand-written `patient_phrasing` synonyms for the LLM-match
 step, e.g. `Fracture-Wrist` → `{"broke my wrist","think my wrist is broken","snapped
-my wrist","fell on my wrist"}`. With 247 terms in scope, synonym authoring is limited
+my wrist","fell on my wrist"}`. With 288 terms in scope, synonym authoring is limited
 at first to whichever terms are used in the demo's rehearsed call(s) plus a broader
-pass generated (not hand-written) for the rest — full manual coverage of 247 terms is
+pass generated (not hand-written) for the rest — full manual coverage of 288 terms is
 out of scope for the baseline.
 
 ### 8.2 Availability — synthetic, by explicit assumption
@@ -931,10 +930,13 @@ an explicit baseline assumption, not an oversight.
 
 Generation rules:
 
-- Each of the 7 routing-eligible doctors gets a **recurring weekly template** across
-  their real seeded practice locations — e.g. Yu: Mon/Wed/Fri at Port Jefferson,
-  Tue/Thu at Riverhead; Rana: Mon/Tue/Thu 8:30–16:30 at Port Jefferson. Templates
-  differ per doctor so "this doctor is booked, try the next one" is reachable.
+- Each routing-eligible doctor gets a **recurring weekly template** across their real
+  seeded practice locations. The original 7 LIBJ doctors have hand-curated templates —
+  e.g. Yu: Mon/Wed/Fri at Port Jefferson, Tue/Thu at Riverhead; Rana: Mon/Tue/Thu
+  8:30–16:30 at Port Jefferson. The other 45 eligible doctors (Orlin & Cohen) get a
+  generic round-robin template across their real practices — still real data, just not
+  hand-picked per doctor. Templates differ per doctor so "this doctor is booked, try
+  the next one" is reachable.
 - The template is expanded into concrete slots across a **rolling 14-day window**,
   skipping weekends and a lunch hour.
 - Slot duration by appointment type (CLAUDE.md leaves this to us — documented here as
@@ -951,9 +953,9 @@ Generation rules:
 ### 8.3 Geography
 
 ZIP-to-coordinate resolution uses a **small seeded lookup table of ZIP centroids** for
-the practice's real locations — Southampton, Riverhead, Smithtown, Port Jefferson, and
-Melville — plus a spread of Long Island caller ZIPs, no external geocoding API.
-Distances are straight-line haversine miles, not driving distance; noted as a
+the practice's real locations — the original 5 LIBJ offices plus 9 more Orlin & Cohen
+offices (14 total) — plus a spread of Long Island caller ZIPs, no external geocoding
+API. Distances are straight-line haversine miles, not driving distance; noted as a
 final-product gap.
 
 ### 8.4 Patients and calls
@@ -964,10 +966,9 @@ final-product gap.
     resolves it when the seeded test call's `caller_phone` matches one of the two;
     a separate test case using a third, non-matching `caller_phone` exercises the
     first-name-score and confirm-by-readback fallbacks instead).
-  - Per §8.1, this practice's real data has no age-restricted doctor, so no patient is
-    seeded specifically to trigger `age_restricted` — that branch is exercised in code
-    but not reachable via this seed set without a deliberate, clearly-labeled synthetic
-    tweak (open question, not decided here).
+  - Per §8.1, the expanded roster has real age-restricted doctors (Orlin & Cohen), so
+    `age_restricted` is now naturally reachable by calling in with an out-of-range DOB
+    for one of them — no synthetic patient or doctor tweak needed.
 - 3–5 synthetic completed calls with transcripts across different statuses
   (`scheduled`, `no_match`, `abandoned`) so the dashboard has content before the first
   live demo call.

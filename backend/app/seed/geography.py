@@ -1,5 +1,5 @@
 # ZIP centroid lookup (spec §8.3) -- straight-line haversine proximity
-# ranking, no external geocoding API. Covers the 5 real LIBJ practice ZIPs
+# ranking, no external geocoding API. Covers the seeded practice ZIPs
 # (label = practice name) plus a spread of other Long Island ZIPs so
 # proximity-ranking demos have somewhere realistic to call from.
 #
@@ -12,6 +12,10 @@ ZIP_CENTROIDS = {
     "11787": (40.8556, -73.2029, "Smithtown"),
     "11777": (40.9462, -73.0704, "Port Jefferson"),
     "11747": (40.7940, -73.4154, "Melville"),
+    # Real Orlin & Cohen practice locations 
+    "11746": (40.8698, -73.4001, "Huntington Station"),
+    "11570": (40.6576, -73.6412, "Rockville Centre"),
+    "11797": (40.8151, -73.4682, "Woodbury"),
     # Spread of other Long Island caller ZIPs for proximity demos.
     "11563": (40.6551, -73.6768, "Lynbrook"),
     "11566": (40.6668, -73.5502, "Merrick"),

@@ -21,10 +21,9 @@ NEAR_FULL_FRACTION = 0.97
 NEAR_FULL_DOCTOR_LAST_NAME = "McGinley"  # smallest roster (one office) -- easiest to fill
 
 # Weekly templates: which weekday(s) (Mon=0) a doctor is at which of their
-# real seeded practices. Yu and Rana's templates match the illustrative
-# examples in spec §8.2 exactly; the rest are reasonable choices within each
-# doctor's real doctor_practices set so "this doctor is booked, try the next
-# one" is reachable across different offices.
+# real seeded practices. Hand-curated for the original 7 LIBJ doctors (Yu
+# and Rana's match spec §8.2's illustrative examples exactly); every other
+# eligible doctor gets a generic round-robin fallback (_fallback_template).
 WEEKLY_TEMPLATES = {
     "Densen": {0: "Southampton", 1: "Riverhead", 3: "Smithtown", 4: "Southampton"},
     "Fracchia": {0: "Port Jefferson", 1: "Riverhead", 2: "Melville", 4: "Port Jefferson"},
@@ -82,12 +81,23 @@ def _wipe_rolling_window(today, slot_model, appointment_model, call_fk_column):
         db.session.flush()
 
 
+def _fallback_template(doctor):
+    """Round-robins a doctor's real seeded practices across the 5 weekdays --
+    used for any routing-eligible doctor without a hand-curated
+    WEEKLY_TEMPLATES entry (every Orlin & Cohen doctor), so they still get
+    real, bookable availability instead of silently having none."""
+    practice_names = [dp.practice.name for dp in doctor.doctor_practices]
+    if not practice_names:
+        return {}
+    return {weekday: practice_names[weekday % len(practice_names)] for weekday in range(5)}
+
+
 def generate_availability(doctors_by_name, practices_by_key, patients, rng=None):
     """Expands each routing-eligible doctor's weekly template over the
     rolling 14-day window, then pre-books a realistic fraction of the
     result. `doctors_by_name` keys are "Last, First" (spreadsheet.py's
-    convention); only doctors present in WEEKLY_TEMPLATES get slots, which
-    is exactly the 7 routing-eligible doctors (spec §8.1)."""
+    convention); a hand-curated WEEKLY_TEMPLATES entry is used where one
+    exists (the original 7), else a generic round-robin fallback."""
     rng = rng or random.Random(2026)
     today = date.today()
     _wipe_rolling_window(today, AppointmentSlot, Appointment, Call.appointment_id)
@@ -96,13 +106,12 @@ def generate_availability(doctors_by_name, practices_by_key, patients, rng=None)
 
     for doctor_key, doctor in doctors_by_name.items():
         last_name = doctor_key.split(",")[0]
-        template = WEEKLY_TEMPLATES.get(last_name)
-        if not template:
-            continue  # Arena/Marano/Nissen -- not routing-eligible, no schedule.
 
         # One query per doctor instead of one per booked slot: (term_id ->
         # default_appointment_type) for every term this doctor is eligible
-        # for, reused across every booking decision below.
+        # for, reused across every booking decision below. Also the real
+        # eligibility signal -- a doctor with no term_eligibility rows isn't
+        # routing-eligible and gets no schedule, regardless of template.
         appointment_type_by_term_id = dict(
             db.session.query(Term.id, Term.default_appointment_type)
             .join(TermEligibility, TermEligibility.term_id == Term.id)
@@ -110,6 +119,13 @@ def generate_availability(doctors_by_name, practices_by_key, patients, rng=None)
             .all()
         )
         eligible_term_ids = list(appointment_type_by_term_id)
+        if not eligible_term_ids:
+            continue
+
+        template = WEEKLY_TEMPLATES.get(last_name) or _fallback_template(doctor)
+        if not template:
+            continue  # eligible but no seeded practice at all -- defensive, shouldn't happen
+
         near_full = last_name == NEAR_FULL_DOCTOR_LAST_NAME
 
         for offset in range(WINDOW_DAYS):
