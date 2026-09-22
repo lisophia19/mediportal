@@ -24,7 +24,7 @@ _GENDER_MAP = {"male": "male", "mostly_male": "male", "female": "female", "mostl
 # Real names the detector doesn't recognize (not in its name database) --
 # confirmed by hand rather than guessed. Add an entry here for any future
 # name that falls through to "unknown"/"andy".
-GENDER_OVERRIDES = {}
+GENDER_OVERRIDES = {"Moiz": "male", "Rasel": "male", "Alpesh": "male"}
 
 
 def _infer_gender(first_name):
