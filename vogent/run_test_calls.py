@@ -79,6 +79,43 @@ SCENARIOS = {
         "Dana Marsh, date of birth March 22nd 1967, phone "
         "703-555-0164, ZIP 11566. Complete the booking."
     ),
+    "triage_hip_vs_knee": (
+        "You are a NEW patient. When asked what's going on, say only that "
+        "you've been having a lot of pain and you're not sure what's "
+        "causing it -- do NOT name a specific body part unless asked "
+        "directly. If pressed, say it's somewhere around your hip and "
+        "thigh, hard to pin down exactly. Answer whatever discriminating "
+        "question the agent asks as naturally as you can, leaning toward "
+        "answers that point to a hip issue (e.g. if asked about pain when "
+        "putting on shoes/socks or getting in a car, say yes that's "
+        "exactly it). Name Robin Castellano, date of birth August 14th "
+        "1962, phone 703-555-0178, ZIP 11747. Complete the booking."
+    ),
+    "triage_neck_vs_shoulder": (
+        "You are a NEW patient. When asked what's going on, say only that "
+        "your neck and shoulder area has been bothering you and you're not "
+        "sure exactly what it is -- do NOT name one specific body part "
+        "unless asked directly. Answer whatever discriminating question "
+        "the agent asks naturally, leaning toward answers that point to a "
+        "neck issue (e.g. if asked whether it radiates down your arm or "
+        "gets worse turning your head, say yes). Name Taylor Osei, date of "
+        "birth May 9th 1979, phone 703-555-0179, ZIP 11566. Complete the "
+        "booking."
+    ),
+    "triage_exhausted_callback": (
+        "You are a NEW patient. When asked what's going on, say only that "
+        "you've been having a lot of pain and you're not sure what's "
+        "causing it -- do NOT name a body part unless asked directly. For "
+        "EVERY discriminating question the agent asks trying to narrow it "
+        "down, give a genuinely vague, noncommittal answer that doesn't "
+        "clearly point either way (e.g. 'I'm not really sure, it's hard to "
+        "say', 'maybe both, I don't know'). Keep doing this for the whole "
+        "call -- never give a clear answer. If the agent eventually says "
+        "someone from the office will call you back, accept that "
+        "gracefully and end the call -- do NOT expect a booking to "
+        "complete. Name Casey Fennimore, date of birth June 6th 1990, "
+        "phone 703-555-0180, ZIP 11566."
+    ),
     # --- clarification / no-signal ---------------------------------------
     "needs_clarification": (
         "You are a NEW patient. When asked what's going on, say only 'my "
@@ -95,6 +132,21 @@ SCENARIOS = {
         "bringing you in, say your shoulder has been aching for a couple of "
         "weeks. Name Sam Ferris, date of birth January 30th 1975, phone "
         "703-555-0166, ZIP 11530. Complete the booking."
+    ),
+    "no_reason_given_then_ambiguous": (
+        "You are a NEW patient. When asked what's going on, say ONLY 'I'd "
+        "like to schedule an appointment, please' -- give no medical reason "
+        "at all on that first answer. If the agent then asks what's "
+        "bringing you in, say only that you've been having a lot of pain "
+        "and you're not sure what's causing it, without naming a specific "
+        "body part unless asked directly. This is a compounding edge case "
+        "(no signal on attempt 1, still vague on attempt 2) -- the agent "
+        "may not be able to fully resolve it and might instead say someone "
+        "from the office will call you back. If that happens, accept it "
+        "gracefully; if the agent instead asks a follow-up question and "
+        "resolves it, answer naturally and complete the booking. Name "
+        "Morgan Delacroix, date of birth February 11th 1984, phone "
+        "703-555-0181, ZIP 11530."
     ),
     # --- alternatives ----------------------------------------------------
     "more_slots": (

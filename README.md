@@ -72,10 +72,27 @@ see spec §1). Two-stage approach in `backend/app/blueprints/routing.py`:
    `claude-sonnet-5`; needs `ANTHROPIC_API_KEY` set in the environment). The
    model returns a confidence-scored pick (or "none of these"), which is
    bucketed into one of three response shapes: `matched` (confident single
-   term), `needs_clarification` (ambiguous between top candidates, returns a
-   disambiguating question), or `no_match` (no reasonable candidate — a
-   plain-language front-desk response, never a raw error). Thresholds are in
-   `routing.py`: `MATCH_CONFIDENCE`, `CLARIFY_CONFIDENCE`, `MATCH_GAP`.
+   term, `MATCH_CONFIDENCE`/`MATCH_GAP` thresholds in `routing.py`),
+   `needs_triage` (ambiguous between the top two candidates), or `no_match`
+   (no reasonable candidate — a plain-language front-desk response, never a
+   raw error).
+
+   **Ambiguous complaints are resolved by a fluid triage loop, not a fixed
+   question list.** `_generate_triage_question` asks the same Anthropic API
+   for the single best discriminating question between whichever two terms
+   are ambiguous this time — a real symptom-based question when one exists
+   (e.g. "does the pain travel down your leg, or stay in one spot?" for
+   hip vs. spine), falling back to a plain "is it more like A, or B?" only
+   when no better discriminator exists. Nothing about which pairs are
+   ambiguous, or what to ask, is hardcoded — the same mechanism handles
+   hip/spine, hip/knee, neck/shoulder, or any other pair the matcher
+   surfaces. `POST /routing/resolve-triage` classifies the caller's answer
+   (`_classify_triage_answer`) and either resolves to a term or — on a
+   genuinely unclear answer — generates a new follow-up question via the
+   same mechanism, informed by what was already asked. The Vogent flow caps
+   this at 3 rounds; if still unresolved, the caller gets an honest "someone
+   from the office will call you back" instead of ever being routed on a
+   forced guess.
 
 Patient last-name matching (`POST /patients/lookup`, spec §5.3) uses a
 different technique — `rapidfuzz` (`fuzz.WRatio`) for the soft first-name

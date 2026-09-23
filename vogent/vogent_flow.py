@@ -5,7 +5,16 @@
 #
 # Known simplifications in this first build (see the chat/report for why):
 #  - Patient disambiguation retries only once (no excluded_patient_ids loop).
-#  - Complaint clarification only retries once (spec allows up to 2 rounds).
+#  - The rare "complaint had zero clinical signal words at all" case (e.g.
+#    "I'd like an appointment please") retries once via ask_clarify /
+#    match_issue_retry_fn; an ambiguous-but-real complaint instead enters
+#    the fluid triage loop (up to 3 rounds, see the "Fluid triage" nodes
+#    below), which is the actual answer to the spec's "needs_clarification"
+#    case now. If THAT retry itself comes back needs_triage (real but
+#    still ambiguous), it doesn't get its own triage loop -- falls through
+#    to an honest callback instead (see match_issue_retry_fn's comment).
+#    Never a forced guess either way, just not the fullest possible
+#    resolution for this one compounding edge case.
 #  - Only the single closest eligible doctor is tried (spec's "walk the
 #    ranked list on no_slots" is not implemented -- one no_slots ends the call).
 #  - A slot-taken race apologizes rather than auto-re-offering alternates.
@@ -844,14 +853,14 @@ nodes = [
             out("alternate_2_id", "INTEGER", nullable=True),
             out("alternate_2_label", "STRING", nullable=True),
             out("triage_question", "STRING", nullable=True),
-            out("hip_term_id", "INTEGER", nullable=True),
-            out("hip_label", "STRING", nullable=True),
-            out("spine_term_id", "INTEGER", nullable=True),
-            out("spine_label", "STRING", nullable=True),
+            out("term_a_id", "INTEGER", nullable=True),
+            out("term_a_label", "STRING", nullable=True),
+            out("term_b_id", "INTEGER", nullable=True),
+            out("term_b_label", "STRING", nullable=True),
         ],
         transitions=[
             equal("match_issue_fn", "status", "matched", "confirm_complaint"),
-            equal("match_issue_fn", "status", "needs_triage", "ask_triage_question"),
+            equal("match_issue_fn", "status", "needs_triage", "ask_triage_question_1"),
             equal("match_issue_fn", "status", "needs_clarification", "ask_clarify"),
             equal("match_issue_fn", "status", "no_match", "log_no_match_fn"),
             always("dead_end_system_error"),
@@ -905,22 +914,26 @@ nodes = [
         outputs=[out("status", "STRING")],
         transitions=[always("ask_first_name")],
     ),
-    # --- Hip-vs-spine triage (spec §5.1 needs_triage) -----------------------
-    # A dedicated screening question for this one specific ambiguity, rather
-    # than the generic "is it more like X or Y" clarify_prompt -- see
-    # match_issue's needs_triage branch for why. The mapping from answer to
-    # region lives entirely in the backend (resolve_triage), never here.
+    # --- Fluid triage (spec §5.1 needs_triage) -------------------------------
+    # No hardcoded pair or fixed question -- match_issue_fn generates a real
+    # discriminating question live for whichever two candidates are
+    # ambiguous, and resolve_triage classifies the answer against those same
+    # two. Up to 3 rounds (Vogent nodes are static per-node templates, so a
+    # real loop means 3 literal round-pairs, not a runtime loop -- the
+    # established pattern in this file); round 3's still_unclear goes to an
+    # honest callback dead end instead of ever forcing a guess.
     question_node(
-        "ask_triage_question", "ask-triage-question",
+        "ask_triage_question_1", "ask-triage-question-1",
         "{{node.match_issue_fn.triage_question}}",
         transitions=[always("resolve_triage_fn")],
     ),
     function_node(
         "resolve_triage_fn", "resolve-triage-fn", "resolve_triage",
         inputs={
-            "triage_answer": "{{node.ask_triage_question.answer}}",
-            "hip_term_id": "{{node.match_issue_fn.hip_term_id}}",
-            "spine_term_id": "{{node.match_issue_fn.spine_term_id}}",
+            "triage_answer": "{{node.ask_triage_question_1.answer}}",
+            "triage_question": "{{node.match_issue_fn.triage_question}}",
+            "term_a_id": "{{node.match_issue_fn.term_a_id}}",
+            "term_b_id": "{{node.match_issue_fn.term_b_id}}",
         },
         outputs=[
             out("status", "STRING"),
@@ -928,25 +941,25 @@ nodes = [
             out("confirm_prompt", "STRING", nullable=True),
             out("alternate_1_id", "INTEGER", nullable=True),
             out("alternate_1_label", "STRING", nullable=True),
-            out("spoken_response", "STRING", nullable=True),
+            out("triage_question", "STRING", nullable=True),
         ],
         transitions=[
-            equal("resolve_triage_fn", "status", "matched", "confirm_triage"),
-            equal("resolve_triage_fn", "status", "still_unclear", "ask_triage_preference"),
+            equal("resolve_triage_fn", "status", "matched", "confirm_triage_1"),
+            equal("resolve_triage_fn", "status", "still_unclear", "ask_triage_question_2"),
             always("dead_end_system_error"),
         ],
     ),
     question_node(
-        "confirm_triage", "confirm-triage",
+        "confirm_triage_1", "confirm-triage-1",
         "{{node.resolve_triage_fn.confirm_prompt}}",
         answer_guidelines="Classify the caller's reply as YES or NO for the answer field only -- never say the word YES or NO out loud yourself.",
         transitions=[
-            equal("confirm_triage", "answer", "YES", "save_term_triaged"),
+            equal("confirm_triage_1", "answer", "YES", "save_term_triaged_1"),
             always("ask_complaint"),
         ],
     ),
     function_node(
-        "save_term_triaged", "save-term-triaged", "update_call",
+        "save_term_triaged_1", "save-term-triaged-1", "update_call",
         inputs={
             "matched_term_id": "{{node.resolve_triage_fn.term.id}}",
             "raw_complaint": "{{node.ask_complaint.answer}}",
@@ -954,32 +967,44 @@ nodes = [
         outputs=[out("status", "STRING")],
         transitions=[always("ask_first_name")],
     ),
-    # If the screening question itself came back unclear, ask the caller to
-    # just state a preference directly rather than guessing -- one more
-    # attempt, then an honest dead end rather than looping indefinitely.
     question_node(
-        "ask_triage_preference", "ask-triage-preference",
-        "{{node.resolve_triage_fn.spoken_response}}",
+        "ask_triage_question_2", "ask-triage-question-2",
+        "{{node.resolve_triage_fn.triage_question}}",
         transitions=[always("resolve_triage_retry_fn")],
     ),
     function_node(
         "resolve_triage_retry_fn", "resolve-triage-retry-fn", "resolve_triage",
         inputs={
-            "triage_answer": "{{node.ask_triage_preference.answer}}",
-            "hip_term_id": "{{node.match_issue_fn.hip_term_id}}",
-            "spine_term_id": "{{node.match_issue_fn.spine_term_id}}",
+            "triage_answer": "{{node.ask_triage_question_2.answer}}",
+            "triage_question": "{{node.resolve_triage_fn.triage_question}}",
+            "term_a_id": "{{node.match_issue_fn.term_a_id}}",
+            "term_b_id": "{{node.match_issue_fn.term_b_id}}",
         },
         outputs=[
             out("status", "STRING"),
             out("term", "CUSTOM", nullable=True, custom_schema=TERM_SCHEMA),
+            out("confirm_prompt", "STRING", nullable=True),
+            out("alternate_1_id", "INTEGER", nullable=True),
+            out("alternate_1_label", "STRING", nullable=True),
+            out("triage_question", "STRING", nullable=True),
         ],
         transitions=[
-            equal("resolve_triage_retry_fn", "status", "matched", "save_term_triaged_retry"),
-            always("dead_end_no_match_direct"),
+            equal("resolve_triage_retry_fn", "status", "matched", "confirm_triage_2"),
+            equal("resolve_triage_retry_fn", "status", "still_unclear", "ask_triage_question_3"),
+            always("dead_end_system_error"),
+        ],
+    ),
+    question_node(
+        "confirm_triage_2", "confirm-triage-2",
+        "{{node.resolve_triage_retry_fn.confirm_prompt}}",
+        answer_guidelines="Classify the caller's reply as YES or NO for the answer field only -- never say the word YES or NO out loud yourself.",
+        transitions=[
+            equal("confirm_triage_2", "answer", "YES", "save_term_triaged_2"),
+            always("ask_complaint"),
         ],
     ),
     function_node(
-        "save_term_triaged_retry", "save-term-triaged-retry", "update_call",
+        "save_term_triaged_2", "save-term-triaged-2", "update_call",
         inputs={
             "matched_term_id": "{{node.resolve_triage_retry_fn.term.id}}",
             "raw_complaint": "{{node.ask_complaint.answer}}",
@@ -988,15 +1013,84 @@ nodes = [
         transitions=[always("ask_first_name")],
     ),
     question_node(
+        "ask_triage_question_3", "ask-triage-question-3",
+        "{{node.resolve_triage_retry_fn.triage_question}}",
+        transitions=[always("resolve_triage_retry_2_fn")],
+    ),
+    function_node(
+        "resolve_triage_retry_2_fn", "resolve-triage-retry-2-fn", "resolve_triage",
+        inputs={
+            "triage_answer": "{{node.ask_triage_question_3.answer}}",
+            "triage_question": "{{node.resolve_triage_retry_fn.triage_question}}",
+            "term_a_id": "{{node.match_issue_fn.term_a_id}}",
+            "term_b_id": "{{node.match_issue_fn.term_b_id}}",
+            # No round 4 to use a follow-up question -- tells the backend
+            # not to bother generating one on a 3rd unclear answer.
+            "final_round": "true",
+        },
+        outputs=[
+            out("status", "STRING"),
+            out("term", "CUSTOM", nullable=True, custom_schema=TERM_SCHEMA),
+            out("confirm_prompt", "STRING", nullable=True),
+            out("alternate_1_id", "INTEGER", nullable=True),
+            out("alternate_1_label", "STRING", nullable=True),
+        ],
+        transitions=[
+            equal("resolve_triage_retry_2_fn", "status", "matched", "confirm_triage_3"),
+            # 3rd unclear answer in a row -- give up honestly rather than
+            # asking a 4th time or forcing a guess.
+            always("dead_end_triage_exhausted"),
+        ],
+    ),
+    question_node(
+        "confirm_triage_3", "confirm-triage-3",
+        "{{node.resolve_triage_retry_2_fn.confirm_prompt}}",
+        answer_guidelines="Classify the caller's reply as YES or NO for the answer field only -- never say the word YES or NO out loud yourself.",
+        transitions=[
+            equal("confirm_triage_3", "answer", "YES", "save_term_triaged_3"),
+            always("ask_complaint"),
+        ],
+    ),
+    function_node(
+        "save_term_triaged_3", "save-term-triaged-3", "update_call",
+        inputs={
+            "matched_term_id": "{{node.resolve_triage_retry_2_fn.term.id}}",
+            "raw_complaint": "{{node.ask_complaint.answer}}",
+        },
+        outputs=[out("status", "STRING")],
+        transitions=[always("ask_first_name")],
+    ),
+    freeform_node(
+        "dead_end_triage_exhausted", "dead-end-triage-exhausted",
+        (
+            "Apologize that you're having trouble pinning down exactly what's going "
+            "on. Let the caller know someone from the office will call them back to "
+            "help sort it out. Thank them and say <|hangup|>."
+        ),
+    ),
+    question_node(
         "ask_clarify", "ask-clarify",
         "{{node.match_issue_fn.clarify_prompt}}",
         transitions=[always("match_issue_retry_fn")],
     ),
     function_node(
+        # Deliberate scope limit, not an oversight: this retry can now
+        # legitimately come back needs_triage too (match_issue no longer
+        # forces a guess on a second call), but wiring that into its own
+        # 4th triage entry point would mean duplicating round 1's node
+        # pair again for a rare, compounding edge case (zero clinical
+        # signal on attempt 1 AND still genuinely ambiguous on attempt 2).
+        # Any non-"matched" outcome here -- no_match, needs_triage, a
+        # second needs_clarification -- falls through to the same honest
+        # callback dead end. That's a real behavior change from before
+        # this session (previously final_attempt forced a low-confidence
+        # guess instead), but strictly a better one: never a forced guess,
+        # just occasionally a callback where a fuller triage loop could in
+        # principle have resolved it. Revisit if this path proves common
+        # in real calls.
         "match_issue_retry_fn", "match-issue-retry-fn", "match_issue",
         inputs={
             "complaint_text": "{{node.ask_complaint.answer}} {{node.ask_clarify.answer}}",
-            "final_attempt": "true",
         },
         outputs=[
             out("status", "STRING"),

@@ -166,52 +166,10 @@ def test_match_issue_with_no_reason_given_asks_instead_of_guessing(client, db, a
     assert called["n"] == 0
 
 
-def test_match_issue_final_attempt_commits_instead_of_dead_ending(
-    client, db, agent_headers, monkeypatch
-):
-    """Regression test for a real dead-end: on the clarification retry the
-    flow has nowhere to send another needs_clarification, so an ambiguous
-    second answer fell through its catch-all and the caller was told we
-    couldn't help -- for "my shoulder has been aching for a couple of
-    weeks", a perfectly bookable complaint. With final_attempt the retry
-    commits to the best candidate and confirms it instead."""
-    shoulder = _make_term(db, term="Pain-Shoulder", body_part="Shoulder/UE")
-    arthritis = _make_term(db, term="Arthritis-Shoulder", body_part="Shoulder/UE")
-    db.commit()
-    payload = {
-        "ortho_relevant": True,
-        "matches": [
-            {"term_id": shoulder.id, "confidence": 0.45, "spoken_label": "shoulder pain"},
-            {"term_id": arthritis.id, "confidence": 0.40, "spoken_label": "shoulder arthritis"},
-        ],
-    }
-
-    _mock_llm(monkeypatch, payload)
-    ambiguous = client.post(
-        "/api/v1/routing/match-issue",
-        json={"complaint_text": "my shoulder aches", "call_id": "vg_fa1"},
-        headers=agent_headers,
-    ).get_json()
-    assert ambiguous["status"] == "needs_clarification"  # first round still asks
-
-    _mock_llm(monkeypatch, payload)
-    final = client.post(
-        "/api/v1/routing/match-issue",
-        json={
-            "complaint_text": "my shoulder aches",
-            "call_id": "vg_fa2",
-            "final_attempt": "true",
-        },
-        headers=agent_headers,
-    ).get_json()
-    assert final["status"] == "matched"
-    assert final["term"]["id"] == shoulder.id
-    assert final["alternate_1_id"] == arthritis.id
-
-
-def test_match_issue_final_attempt_still_declines_non_ortho(client, db, agent_headers, monkeypatch):
-    """final_attempt commits to a best guess, but must not override an
-    honest "we don't treat that" -- ortho_relevant stays the gate."""
+def test_match_issue_stray_final_attempt_param_is_ignored(client, db, agent_headers, monkeypatch):
+    """final_attempt (the old force-a-guess mechanism) is gone -- a stray
+    legacy value in the payload must be silently ignored, never crash or
+    change behavior. ortho_relevant stays the real gate."""
     _make_term(db)
     db.commit()
     _mock_llm(monkeypatch, {"ortho_relevant": False, "matches": []})
@@ -383,7 +341,12 @@ def test_match_issue_handles_markdown_fenced_json(client, db, agent_headers, mon
     assert body["term"]["id"] == term.id
 
 
-def test_match_issue_needs_clarification(client, db, agent_headers, monkeypatch):
+def test_match_issue_ambiguous_generates_fluid_triage_question(client, db, agent_headers, monkeypatch):
+    """Any ambiguous top-2 pair -- not just hip/spine -- enters the fluid
+    triage loop: a real discriminating question generated live for these
+    specific candidates, not a hardcoded pair or a generic "is it more
+    like X or Y". Uses an unrelated pair (wrist fracture vs. wrist pain) to
+    prove the mechanism isn't hip/spine-specific."""
     term_a = _make_term(db, term="Fracture-Wrist")
     term_b = _make_term(db, term="Pain-Wrist", category="pain")
     db.commit()
@@ -397,6 +360,9 @@ def test_match_issue_needs_clarification(client, db, agent_headers, monkeypatch)
             ],
         },
     )
+    monkeypatch.setattr(
+        routing_module, "_generate_triage_question", lambda a, b, *args, **kwargs: "Did this start suddenly, after an injury?"
+    )
 
     resp = client.post(
         "/api/v1/routing/match-issue",
@@ -404,16 +370,16 @@ def test_match_issue_needs_clarification(client, db, agent_headers, monkeypatch)
         headers=agent_headers,
     )
     body = resp.get_json()
-    assert body["status"] == "needs_clarification"
-    assert len(body["candidates"]) == 2
-    assert "clarify_prompt" in body
+    assert body["status"] == "needs_triage"
+    assert body["term_a_id"] == term_a.id
+    assert body["term_b_id"] == term_b.id
+    assert body["triage_question"] == "Did this start suddenly, after an injury?"
 
 
 def test_match_issue_ambiguous_hip_vs_spine_triggers_triage(client, db, agent_headers, monkeypatch):
-    """Hip and spine share vague, overlapping presentations ("pain") often
-    enough that the generic 'is it more like X or Y' clarify_prompt is a
-    weak question -- this specific ambiguity should trigger the dedicated
-    screening question instead."""
+    """The originally-motivating hip/spine ambiguity still works the same
+    way -- through the generic mechanism now, not a hardcoded special
+    case."""
     hip_term = _make_term(db, term="Pain-Hip", body_part="Hip", category="pain")
     spine_term = _make_term(db, term="Pain-Back", body_part="Back/Neck", category="pain")
     db.commit()
@@ -427,6 +393,11 @@ def test_match_issue_ambiguous_hip_vs_spine_triggers_triage(client, db, agent_he
             ],
         },
     )
+    monkeypatch.setattr(
+        routing_module,
+        "_generate_triage_question",
+        lambda a, b, *args, **kwargs: "Does the pain travel down your leg, or stay in one spot?",
+    )
 
     resp = client.post(
         "/api/v1/routing/match-issue",
@@ -435,23 +406,125 @@ def test_match_issue_ambiguous_hip_vs_spine_triggers_triage(client, db, agent_he
     )
     body = resp.get_json()
     assert body["status"] == "needs_triage"
-    assert body["hip_term_id"] == hip_term.id
-    assert body["spine_term_id"] == spine_term.id
+    assert body["term_a_id"] == hip_term.id
+    assert body["term_b_id"] == spine_term.id
     assert "triage_question" in body
 
 
-def test_resolve_triage_hip_answer(client, db, agent_headers, monkeypatch):
+def test_full_triage_loop_resolves_on_third_round_knee_vs_shoulder(
+    client, db, agent_headers, monkeypatch
+):
+    """End-to-end through all 3 rounds for a pair that's neither hip/spine
+    nor wrist -- proves the mechanism genuinely generalizes, not just to
+    the two pairs exercised everywhere else in this file. Rounds 1 and 2
+    come back unclear (each generating a real follow-up question, not a
+    repeat); round 3 finally resolves, and confirms final_round doesn't
+    interfere with a real resolution on the last round."""
+    knee_term = _make_term(db, term="Pain-Knee", body_part="Knee", category="pain")
+    shoulder_term = _make_term(
+        db, term="Pain-Shoulder", body_part="Shoulder/UE", category="pain"
+    )
+    db.commit()
+
+    # --- match_issue: ambiguous complaint enters the triage loop ---------
+    _mock_llm(
+        monkeypatch,
+        {
+            "ortho_relevant": True,
+            "matches": [
+                {"term_id": knee_term.id, "confidence": 0.5, "spoken_label": "knee pain"},
+                {"term_id": shoulder_term.id, "confidence": 0.45, "spoken_label": "shoulder pain"},
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        routing_module,
+        "_generate_triage_question",
+        lambda a, b, *args, **kwargs: "Is the pain worse when you're walking, or when you're lifting something?",
+    )
+    match_body = client.post(
+        "/api/v1/routing/match-issue",
+        json={"complaint_text": "I've got a lot of pain, not sure exactly where it's from", "call_id": "vg_full1"},
+        headers=agent_headers,
+    ).get_json()
+    assert match_body["status"] == "needs_triage"
+    assert {match_body["term_a_id"], match_body["term_b_id"]} == {knee_term.id, shoulder_term.id}
+    round_1_question = match_body["triage_question"]
+
+    # --- round 1: unclear -> a genuinely different follow-up question ----
+    monkeypatch.setattr(routing_module, "_classify_triage_answer", lambda a, b, q, ans: "UNCLEAR")
+    monkeypatch.setattr(
+        routing_module,
+        "_generate_triage_question",
+        lambda a, b, *args, **kwargs: "Does it hurt more going up stairs, or reaching overhead?",
+    )
+    round_1_body = client.post(
+        "/api/v1/routing/resolve-triage",
+        json={
+            "triage_answer": "hmm, kind of both I guess",
+            "triage_question": round_1_question,
+            "term_a_id": match_body["term_a_id"],
+            "term_b_id": match_body["term_b_id"],
+            "call_id": "vg_full1",
+        },
+        headers=agent_headers,
+    ).get_json()
+    assert round_1_body["status"] == "still_unclear"
+    round_2_question = round_1_body["triage_question"]
+    assert round_2_question != round_1_question
+
+    # --- round 2: still unclear -> another new follow-up question --------
+    monkeypatch.setattr(
+        routing_module,
+        "_generate_triage_question",
+        lambda a, b, *args, **kwargs: "Is there any swelling or clicking when you bend it?",
+    )
+    round_2_body = client.post(
+        "/api/v1/routing/resolve-triage",
+        json={
+            "triage_answer": "not really sure, honestly",
+            "triage_question": round_2_question,
+            "term_a_id": match_body["term_a_id"],
+            "term_b_id": match_body["term_b_id"],
+            "call_id": "vg_full1",
+        },
+        headers=agent_headers,
+    ).get_json()
+    assert round_2_body["status"] == "still_unclear"
+    round_3_question = round_2_body["triage_question"]
+    assert round_3_question not in (round_1_question, round_2_question)
+
+    # --- round 3 (final_round): a real answer finally resolves it --------
+    monkeypatch.setattr(routing_module, "_classify_triage_answer", lambda a, b, q, ans: "A")
+    round_3_body = client.post(
+        "/api/v1/routing/resolve-triage",
+        json={
+            "triage_answer": "yeah, definitely clicking when I bend it",
+            "triage_question": round_3_question,
+            "term_a_id": match_body["term_a_id"],
+            "term_b_id": match_body["term_b_id"],
+            "call_id": "vg_full1",
+            "final_round": "true",
+        },
+        headers=agent_headers,
+    ).get_json()
+    assert round_3_body["status"] == "matched"
+    assert round_3_body["term"]["id"] == match_body["term_a_id"]
+
+
+def test_resolve_triage_a_answer(client, db, agent_headers, monkeypatch):
     hip_term = _make_term(db, term="Pain-Hip", body_part="Hip", category="pain")
     spine_term = _make_term(db, term="Pain-Back", body_part="Back/Neck", category="pain")
     db.commit()
-    monkeypatch.setattr(routing_module, "_classify_hip_or_spine_answer", lambda q, a: "HIP")
+    monkeypatch.setattr(routing_module, "_classify_triage_answer", lambda a, b, q, ans: "A")
 
     resp = client.post(
         "/api/v1/routing/resolve-triage",
         json={
             "triage_answer": "it mostly just stays in one spot",
-            "hip_term_id": hip_term.id,
-            "spine_term_id": spine_term.id,
+            "triage_question": "Does it travel or stay in one spot?",
+            "term_a_id": hip_term.id,
+            "term_b_id": spine_term.id,
             "call_id": "vg_3",
         },
         headers=agent_headers,
@@ -462,18 +535,19 @@ def test_resolve_triage_hip_answer(client, db, agent_headers, monkeypatch):
     assert body["alternate_1_id"] == spine_term.id
 
 
-def test_resolve_triage_spine_answer(client, db, agent_headers, monkeypatch):
+def test_resolve_triage_b_answer(client, db, agent_headers, monkeypatch):
     hip_term = _make_term(db, term="Pain-Hip", body_part="Hip", category="pain")
     spine_term = _make_term(db, term="Pain-Back", body_part="Back/Neck", category="pain")
     db.commit()
-    monkeypatch.setattr(routing_module, "_classify_hip_or_spine_answer", lambda q, a: "SPINE")
+    monkeypatch.setattr(routing_module, "_classify_triage_answer", lambda a, b, q, ans: "B")
 
     resp = client.post(
         "/api/v1/routing/resolve-triage",
         json={
             "triage_answer": "it shoots down my leg",
-            "hip_term_id": hip_term.id,
-            "spine_term_id": spine_term.id,
+            "triage_question": "Does it travel or stay in one spot?",
+            "term_a_id": hip_term.id,
+            "term_b_id": spine_term.id,
             "call_id": "vg_3",
         },
         headers=agent_headers,
@@ -484,25 +558,73 @@ def test_resolve_triage_spine_answer(client, db, agent_headers, monkeypatch):
     assert body["alternate_1_id"] == hip_term.id
 
 
-def test_resolve_triage_unclear_answer(client, db, agent_headers, monkeypatch):
+def test_resolve_triage_unclear_answer_generates_follow_up_question(client, db, agent_headers, monkeypatch):
+    """An unclear answer never forces a guess -- it generates a NEW
+    follow-up question, passing the prior question/answer through so the
+    follow-up doesn't just repeat itself (rounds 2/3 of the triage loop)."""
     hip_term = _make_term(db, term="Pain-Hip", body_part="Hip", category="pain")
     spine_term = _make_term(db, term="Pain-Back", body_part="Back/Neck", category="pain")
     db.commit()
-    monkeypatch.setattr(routing_module, "_classify_hip_or_spine_answer", lambda q, a: "UNCLEAR")
+    monkeypatch.setattr(routing_module, "_classify_triage_answer", lambda a, b, q, ans: "UNCLEAR")
+
+    captured = {}
+
+    def _fake_generate(term_a, term_b, prior_question=None, prior_answer=None):
+        captured["prior_question"] = prior_question
+        captured["prior_answer"] = prior_answer
+        return "Does it hurt more climbing stairs, or bending forward?"
+
+    monkeypatch.setattr(routing_module, "_generate_triage_question", _fake_generate)
 
     resp = client.post(
         "/api/v1/routing/resolve-triage",
         json={
             "triage_answer": "I don't really know",
-            "hip_term_id": hip_term.id,
-            "spine_term_id": spine_term.id,
+            "triage_question": "Does it travel or stay in one spot?",
+            "term_a_id": hip_term.id,
+            "term_b_id": spine_term.id,
             "call_id": "vg_3",
         },
         headers=agent_headers,
     )
     body = resp.get_json()
     assert body["status"] == "still_unclear"
-    assert "spoken_response" in body
+    assert body["triage_question"] == "Does it hurt more climbing stairs, or bending forward?"
+    assert captured["prior_question"] == "Does it travel or stay in one spot?"
+    assert captured["prior_answer"] == "I don't really know"
+
+
+def test_resolve_triage_final_round_skips_wasted_question_generation(
+    client, db, agent_headers, monkeypatch
+):
+    """Round 3 (final_round=true) has no round 4 to ask a follow-up
+    question in -- an unclear answer there must NOT waste an LLM call
+    generating one nothing will ever use."""
+    hip_term = _make_term(db, term="Pain-Hip", body_part="Hip", category="pain")
+    spine_term = _make_term(db, term="Pain-Back", body_part="Back/Neck", category="pain")
+    db.commit()
+    monkeypatch.setattr(routing_module, "_classify_triage_answer", lambda a, b, q, ans: "UNCLEAR")
+
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("_generate_triage_question should not be called on the final round")
+
+    monkeypatch.setattr(routing_module, "_generate_triage_question", _fail_if_called)
+
+    resp = client.post(
+        "/api/v1/routing/resolve-triage",
+        json={
+            "triage_answer": "I still don't know",
+            "triage_question": "Does it hurt more climbing stairs, or bending forward?",
+            "term_a_id": hip_term.id,
+            "term_b_id": spine_term.id,
+            "call_id": "vg_3",
+            "final_round": "true",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "still_unclear"
+    assert "triage_question" not in body
 
 
 def test_resolve_triage_requires_fields(client, agent_headers):
@@ -510,15 +632,46 @@ def test_resolve_triage_requires_fields(client, agent_headers):
     assert resp.status_code == 400
 
 
-def test_match_issue_low_confidence_ortho_relevant_clarifies_not_no_match(
+def test_resolve_triage_classify_failure_surfaces_as_error_not_silent_unclear(
+    client, db, agent_headers, monkeypatch
+):
+    """A real failure in _classify_triage_answer (bad API response, network
+    error, etc.) must surface as a logged 503, not get silently absorbed
+    into a plausible-looking "unclear answer" outcome."""
+    hip_term = _make_term(db, term="Pain-Hip", body_part="Hip", category="pain")
+    spine_term = _make_term(db, term="Pain-Back", body_part="Back/Neck", category="pain")
+    db.commit()
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated transport failure")
+
+    monkeypatch.setattr(routing_module, "_classify_triage_answer", _boom)
+
+    resp = client.post(
+        "/api/v1/routing/resolve-triage",
+        json={
+            "triage_answer": "it stays in one spot",
+            "triage_question": "Does it travel or stay in one spot?",
+            "term_a_id": hip_term.id,
+            "term_b_id": spine_term.id,
+            "call_id": "vg_3",
+        },
+        headers=agent_headers,
+    )
+    assert resp.status_code == 503
+    assert resp.get_json()["status"] == "error"
+
+
+def test_match_issue_low_confidence_ortho_relevant_enters_triage_not_decline(
     client, db, agent_headers, monkeypatch
 ):
     """Regression test for a real production miss: "I have a lot of pain,
     not sure what's causing it" is genuinely orthopedic but too vague to
     name a specific term -- the LLM honestly returns low-confidence
     matches (ortho_relevant=true), which used to get declined as no_match
-    outright by a confidence floor. It should ask a clarifying question
-    instead, the way a real front-desk person would."""
+    outright by a confidence floor. It should enter the triage loop
+    instead of declining, the way a real front-desk person would ask a
+    follow-up rather than turn the caller away."""
     back = _make_term(db, term="Pain-Back", body_part="Back/Neck")
     elbow = _make_term(db, term="Pain-Elbow", body_part="Elbow")
     db.commit()
@@ -532,6 +685,7 @@ def test_match_issue_low_confidence_ortho_relevant_clarifies_not_no_match(
             ],
         },
     )
+    monkeypatch.setattr(routing_module, "_generate_triage_question", lambda a, b, *args, **kwargs: "Where exactly is the pain?")
 
     resp = client.post(
         "/api/v1/routing/match-issue",
@@ -539,7 +693,7 @@ def test_match_issue_low_confidence_ortho_relevant_clarifies_not_no_match(
         headers=agent_headers,
     )
     body = resp.get_json()
-    assert body["status"] == "needs_clarification"
+    assert body["status"] == "needs_triage"
 
 
 def test_match_issue_no_match(client, db, agent_headers, monkeypatch):

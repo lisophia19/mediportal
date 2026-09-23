@@ -62,8 +62,12 @@ Bugs this pass found and fixed (all deployed, all with regression tests):
 Agent config changed: endpoint detection `SIMPLE` → `SEMANTIC` (was cutting
 callers off mid-sentence), utterance detector aligned to the reference agent.
 
-**All 12 scenarios pass** as of 2026-09-19. Re-run after any flow or
-routing change.
+**All 12 scenarios passed as of 2026-09-19**, against the flow as it existed then.
+Since then: Call 3 (named doctor/office), Call 4 (imaging prerequisite), the gender
+filter, the office-only routing fix, and the fluid triage rewrite have all shipped
+without a live re-run. `triage_hip`/`triage_spine`/`needs_clarification` specifically
+need re-verification (their underlying mechanism changed); the rest are lower-risk but
+unverified against current code. Re-run after any flow or routing change.
 
 ## Scenario checklist
 
@@ -73,21 +77,44 @@ routing change.
       *Expect:* matched confidently, new patient created, doctor + slot
       offered, booking confirmed. `status = scheduled`, `appointment_id` set.
 
-### Triage (hip vs. spine)
+### Triage (fluid, LLM-generated -- replaces the old hardcoded hip/spine-only mechanism)
 
-- [x] **`triage_hip`** *(passed 2026-09-18)* — vague "pain", answers *stays in one spot*.
-      *Expect:* screening question asked, routed to a **hip** specialist.
-- [x] **`triage_spine`** *(passed 2026-09-19 after fix #7)* — vague "pain", answers *shoots down my leg*.
-      *Expect:* screening question asked, routed to a **spine** specialist.
+`triage_hip`/`triage_spine` passed against the **old** hardcoded hip/spine special
+case; the triage mechanism was rewritten (no hardcoded pairs, question generated live,
+up to 3 rounds instead of 1 retry) so these need re-verification against the new code,
+not just carried forward as passing.
+
+- [ ] **`triage_hip`** — vague "pain", answers *stays in one spot*.
+      *Expect:* a real discriminating question asked (not necessarily the old fixed
+      wording), routed to a **hip** term.
+- [ ] **`triage_spine`** — vague "pain", answers *shoots down my leg*.
+      *Expect:* routed to a **spine** term.
+- [ ] **`triage_hip_vs_knee`** — vague pain plausibly hip or knee, answers lean hip.
+      *Expect:* the same mechanism handles a pair that was never hardcoded, no code
+      path specific to this pair.
+- [ ] **`triage_neck_vs_shoulder`** — vague pain plausibly neck or shoulder, answers lean neck.
+      *Expect:* same as above.
+- [ ] **`triage_exhausted_callback`** — genuinely unclear answers for all 3 rounds.
+      *Expect:* an honest "someone from the office will call you back" after round 3,
+      never a forced booking on a low-confidence guess.
 
 ### Clarification
 
-- [x] **`needs_clarification`** *(passed 2026-09-19)* — "my knee hurts", then names an injury.
-      *Expect:* one clarifying question, then a confident match. Never a
+- [ ] **`needs_clarification`** — "my knee hurts" has real signal words, so this now
+      likely enters the fluid triage loop (needs_triage) rather than the old
+      zero-signal-words `ask_clarify` path -- needs re-verification against the new
+      code, not just carried forward as passing.
+      *Expect:* one real discriminating question, then a confident match. Never a
       `no_match` decline.
 - [x] **`no_reason_given`** *(passed 2026-09-18 after fix #3)* — "I'd like an appointment" with no reason.
       *Expect:* the agent asks what's bringing them in (deterministic, no
       LLM guess), then proceeds normally. Never a decline or hangup.
+- [ ] **`no_reason_given_then_ambiguous`** — no signal on attempt 1, still vague on
+      attempt 2 (a deliberate, documented scope limit -- see `match_issue_retry_fn`'s
+      comment in vogent_flow.py: this compounding case falls to an honest callback
+      rather than getting its own triage loop).
+      *Expect:* either a real resolution, or an honest "someone will call you back" --
+      never a forced guess, never a crash or unresolved template variable spoken aloud.
 
 ### Alternatives
 

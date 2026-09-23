@@ -39,47 +39,85 @@ MAX_CANDIDATE_TERMS = 12
 
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
 
-# Screening question asked only when a complaint is ambiguous between hip
-# and spine (see match_issue) -- a front-desk heuristic, not a diagnosis.
-HIP_SPINE_TRIAGE_QUESTION = (
-    "Does the pain travel or shoot down into your leg, or does it mostly stay in one spot?"
-)
+# Fluid triage (spec §5.1 needs_triage): no hardcoded ambiguous pairs or
+# fixed question text -- both the screening question and its
+# classification are generated live per ambiguous pair, the same way
+# _classify_complaint already resolves free text via the Anthropic API.
+# Works identically for hip/spine, hip/knee, neck/shoulder, or any other
+# pair the matcher happens to surface.
+_TRIAGE_QUESTION_PROMPT = """You are a front-desk assistant at an orthopedic practice, \
+trying to figure out which of two possible conditions a caller has so you know which \
+specialist to book them with. This is intake triage, not a diagnosis.
 
-# Clinical mapping lives in this prompt, not the Vogent flow -- the flow
-# only ever speaks what the backend decided.
-_TRIAGE_CLASSIFIER_PROMPT = """You are helping a phone-intake system triage an orthopedic \
-patient between a hip specialist and a spine specialist, based on their answer to one \
-screening question: "{question}"
+Candidate A: "{term_a}" (body part: {body_part_a}, category: {category_a})
+Candidate B: "{term_b}" (body part: {body_part_b}, category: {category_b})
+{prior_context}
+Come up with the single best one-shot question a real front-desk person would ask to help \
+tell these two apart. Prefer a concrete question about symptoms, pain location, or what \
+triggers or relieves it, when one genuinely helps distinguish the two -- but if there's no \
+better symptom-based discriminator, a direct "is it more like A, or B?" question is a \
+perfectly fine fallback. Always return a real question, never decline.
 
-Use these patterns (this is intake triage, not a diagnosis):
-- Pain that travels, shoots, or radiates down into the leg (or arm, for neck pain) strongly \
-indicates a SPINE issue (a nerve root being irritated).
-- Pain that stays localized to one spot -- groin, buttock, thigh, hip -- with no radiation \
-suggests a HIP issue.
-- Pain triggered specifically by hip flexion motions (putting on socks/shoes, lifting a knee \
-up) strongly indicates HIP.
-- Pain that flares with coughing, sneezing, or straining strongly indicates SPINE (increased \
-pressure on an irritated nerve root).
-- Pain worse after prolonged standing/walking and relieved by sitting suggests SPINE (a \
-spinal stenosis pattern); stiffness/pain in the first few steps after sitting or waking that \
-loosens up with movement leans HIP (an osteoarthritis "warm-up" pattern), though this one \
-overlaps somewhat with spine facet issues, so weight it less than the others.
+Respond with ONLY the question itself -- no prose, no quotes, no preamble."""
+
+_TRIAGE_ANSWER_PROMPT = """A caller to an orthopedic practice's phone-booking agent was \
+asked this screening question to help tell apart two possible conditions:
+
+Question: "{question}"
+
+Candidate A: "{term_a}" (body part: {body_part_a})
+Candidate B: "{term_b}" (body part: {body_part_b})
 
 Caller's answer: "{answer}"
 
-Respond with ONLY one word: HIP, SPINE, or UNCLEAR if the answer genuinely does not point \
-either way."""
+Respond with ONLY one word: A, B, or UNCLEAR if the answer genuinely does not point to \
+either one."""
 
 
-def _classify_hip_or_spine_answer(question, answer_text):
-    # max_tokens leaves room to think first -- too small and a thinking-only
-    # reply reads as UNCLEAR, sending a clear answer down the retry path.
-    prompt = _TRIAGE_CLASSIFIER_PROMPT.format(question=question, answer=answer_text)
+def _generate_triage_question(term_a, term_b, prior_question=None, prior_answer=None):
+    """Asks the LLM for the single best discriminating question between two
+    ambiguous candidate terms. On a follow-up round, the prior question and
+    answer are included so the new one doesn't just repeat itself. Always
+    returns a real question -- degrades to a generic "is it more like A, or
+    B?" on a transport/parse failure, the same fallback the prompt itself
+    allows the model to use."""
+    prior_context = (
+        f'\nAlready asked: "{prior_question}" -- the caller\'s answer ("{prior_answer}") '
+        "didn't clearly point to either one. Ask something DIFFERENT this time.\n"
+        if prior_question
+        else ""
+    )
+    prompt = _TRIAGE_QUESTION_PROMPT.format(
+        term_a=term_a.term,
+        body_part_a=term_a.body_part or "unspecified",
+        category_a=term_a.category or "unspecified",
+        term_b=term_b.term,
+        body_part_b=term_b.body_part or "unspecified",
+        category_b=term_b.category or "unspecified",
+        prior_context=prior_context,
+    )
     try:
-        verdict = _strip_markdown_fence(_claude_text(prompt, max_tokens=1000)).strip().upper()
-    except ValueError:
-        return "UNCLEAR"
-    return verdict if verdict in ("HIP", "SPINE") else "UNCLEAR"
+        return _strip_markdown_fence(_claude_text(prompt, max_tokens=1000)).strip().strip('"')
+    except Exception:
+        current_app.logger.exception("triage question generation failed")
+        return f"Is this more like {term_a.term}, or {term_b.term}?"
+
+
+def _classify_triage_answer(term_a, term_b, question, answer_text):
+    """Returns "A", "B", or "UNCLEAR". Raises on any transport/parse
+    failure, same as _classify_complaint -- resolve_triage's own
+    exception handler translates that to a 503 and logs it, rather than
+    this silently reading a real failure as an ambiguous answer."""
+    prompt = _TRIAGE_ANSWER_PROMPT.format(
+        question=question,
+        term_a=term_a.term,
+        body_part_a=term_a.body_part or "unspecified",
+        term_b=term_b.term,
+        body_part_b=term_b.body_part or "unspecified",
+        answer=answer_text,
+    )
+    verdict = _strip_markdown_fence(_claude_text(prompt, max_tokens=1000)).strip().upper()
+    return verdict if verdict in ("A", "B") else "UNCLEAR"
 
 
 EARTH_RADIUS_MILES = 3958.8
@@ -291,8 +329,6 @@ def match_issue():
     payload = get_agent_json()
     complaint_text = (payload.get("complaint_text") or "").strip()
     call_id = payload.get("call_id")
-    # Vogent sends every input as a string, so "false"/"" must not read true.
-    final_attempt = str(payload.get("final_attempt") or "").strip().lower() in ("1", "true", "yes")
     if not complaint_text or not call_id:
         return jsonify({"error": "complaint_text and call_id are required"}), 400
 
@@ -337,60 +373,26 @@ def match_issue():
     if top.get("confidence", 0) >= MATCH_CONFIDENCE and gap_clears:
         return _matched_response(top, top_term, matches, terms_by_id)
 
-    # Second and final round: commit to our best read rather than asking
-    # again -- the caller already answered once, and letting them correct it
-    # at the confirm step beats falling through to a dead end.
-    if final_attempt:
-        return _matched_response(top, top_term, matches, terms_by_id)
-
-    # Hip-vs-spine ambiguity: vague "pain" often fits both -- ask a real
-    # screening question instead of a weak "is it more like X or Y?".
-    hip_match = next(
-        (m for m in matches[:3] if getattr(terms_by_id.get(m.get("term_id")), "body_part", None) == "Hip"),
-        None,
-    )
-    spine_match = next(
-        (
-            m
-            for m in matches[:3]
-            if getattr(terms_by_id.get(m.get("term_id")), "body_part", None) == "Back/Neck"
-        ),
-        None,
-    )
-    if hip_match and spine_match:
-        hip_term = terms_by_id[hip_match["term_id"]]
-        spine_term = terms_by_id[spine_match["term_id"]]
-        return jsonify(
-            {
-                "status": "needs_triage",
-                "triage_question": HIP_SPINE_TRIAGE_QUESTION,
-                "hip_term_id": hip_term.id,
-                "hip_label": hip_match.get("spoken_label", hip_term.term),
-                "spine_term_id": spine_term.id,
-                "spine_label": spine_match.get("spoken_label", spine_term.term),
-            }
-        )
-
-    # Ambiguous between the top 1-2 candidates -- ask a clarifying question.
-    clarify_candidates = matches[:2]
-    candidate_payload = []
-    for match in clarify_candidates:
-        term = terms_by_id.get(match.get("term_id"))
-        if term is not None:
-            candidate_payload.append(
-                {"id": term.id, "term": term.term, "label": match.get("spoken_label", term.term)}
-            )
-    if len(candidate_payload) < 2:
+    # Ambiguous: enter the fluid triage loop (spec §5.1) instead of a
+    # hardcoded pair or a generic "is it more like X or Y" -- the
+    # discriminating question is generated live for the actual top-2
+    # candidates every time, so this works the same for hip/spine,
+    # hip/knee, neck/shoulder, or any other pair the matcher surfaces.
+    top_two = [m for m in matches[:2] if terms_by_id.get(m.get("term_id")) is not None]
+    if len(top_two) < 2:
         return jsonify({"status": "no_match", "spoken_response": NO_MATCH_RESPONSE})
 
-    clarify_prompt = (
-        f"Is this more like {candidate_payload[0]['label']}, or {candidate_payload[1]['label']}?"
-    )
+    match_a, match_b = top_two
+    term_a, term_b = terms_by_id[match_a["term_id"]], terms_by_id[match_b["term_id"]]
+    triage_question = _generate_triage_question(term_a, term_b)
     return jsonify(
         {
-            "status": "needs_clarification",
-            "candidates": candidate_payload,
-            "clarify_prompt": clarify_prompt,
+            "status": "needs_triage",
+            "triage_question": triage_question,
+            "term_a_id": term_a.id,
+            "term_a_label": match_a.get("spoken_label", term_a.term),
+            "term_b_id": term_b.id,
+            "term_b_label": match_b.get("spoken_label", term_b.term),
         }
     )
 
@@ -398,26 +400,32 @@ def match_issue():
 @routing_bp.post("/resolve-triage")
 @require_agent_key
 def resolve_triage():
-    """Resolves the hip-vs-spine screening answer (see needs_triage in
-    match_issue) to one of the two candidate terms. Mirrors match_issue's
-    "matched" response shape."""
+    """Resolves a triage screening answer (see needs_triage in match_issue)
+    to one of two candidate terms. Serves all 3 rounds of the triage loop:
+    on an unclear answer it generates a NEW follow-up question
+    (still_unclear) rather than forcing a guess -- the Vogent flow (not
+    this endpoint) decides when to give up after round 3, via
+    final_round=true on that round's call, which skips generating a
+    follow-up question nothing will ever ask."""
     payload = get_agent_json()
     triage_answer = (payload.get("triage_answer") or "").strip()
-    hip_term_id = coerce_int(payload.get("hip_term_id"))
-    spine_term_id = coerce_int(payload.get("spine_term_id"))
-    if not triage_answer or not hip_term_id or not spine_term_id:
+    triage_question = (payload.get("triage_question") or "").strip()
+    term_a_id = coerce_int(payload.get("term_a_id"))
+    term_b_id = coerce_int(payload.get("term_b_id"))
+    final_round = str(payload.get("final_round") or "").strip().lower() in ("1", "true", "yes")
+    if not triage_answer or not term_a_id or not term_b_id:
         return (
-            jsonify({"error": "triage_answer, hip_term_id, and spine_term_id are required"}),
+            jsonify({"error": "triage_answer, term_a_id, and term_b_id are required"}),
             400,
         )
 
-    hip_term = db.session.get(Term, hip_term_id)
-    spine_term = db.session.get(Term, spine_term_id)
-    if hip_term is None or spine_term is None:
+    term_a = db.session.get(Term, term_a_id)
+    term_b = db.session.get(Term, term_b_id)
+    if term_a is None or term_b is None:
         return jsonify({"status": "no_match", "spoken_response": NO_MATCH_RESPONSE})
 
     try:
-        verdict = _classify_hip_or_spine_answer(HIP_SPINE_TRIAGE_QUESTION, triage_answer)
+        verdict = _classify_triage_answer(term_a, term_b, triage_question, triage_answer)
     except Exception:
         current_app.logger.exception("LLM resolve-triage call failed")
         return (
@@ -434,26 +442,17 @@ def resolve_triage():
         )
 
     if verdict == "UNCLEAR":
-        return jsonify(
-            {
-                "status": "still_unclear",
-                "spoken_response": (
-                    "I want to make sure I get you to the right specialist -- would you "
-                    "like to see our hip specialist, or our spine specialist?"
-                ),
-            }
-        )
+        if final_round:
+            return jsonify({"status": "still_unclear"})
+        next_question = _generate_triage_question(term_a, term_b, triage_question, triage_answer)
+        return jsonify({"status": "still_unclear", "triage_question": next_question})
 
-    chosen, other = (hip_term, spine_term) if verdict == "HIP" else (spine_term, hip_term)
-    region_label = "hip" if verdict == "HIP" else "spine"
+    chosen, other = (term_a, term_b) if verdict == "A" else (term_b, term_a)
     return jsonify(
         {
             "status": "matched",
             "term": _term_payload(chosen),
-            "confirm_prompt": (
-                f"Based on that, it sounds like our {region_label} team would be the "
-                "right fit -- does that sound right?"
-            ),
+            "confirm_prompt": f"It sounds like this is {chosen.term} -- does that sound right?",
             "alternate_1_id": other.id,
             "alternate_1_label": other.term,
             "alternate_2_id": None,

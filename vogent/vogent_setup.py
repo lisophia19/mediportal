@@ -295,16 +295,18 @@ FUNCTIONS = [
     ),
     (
         "resolve_triage",
-        "Resolve a hip-vs-spine screening answer to one of the two candidate terms (spec §5.1 needs_triage).",
+        "Resolve a triage screening answer to one of two candidate terms (spec §5.1 needs_triage). Serves every round of the triage loop -- on an unclear answer it returns a new follow-up question instead of forcing a guess.",
         "/routing/resolve-triage",
         _schema(
             {
                 "triage_answer": {"type": "string", "description": "Caller's answer to the screening question"},
-                "hip_term_id": {"type": "integer"},
-                "spine_term_id": {"type": "integer"},
+                "triage_question": {"type": "string", "description": "The exact question just asked, for classification context and to avoid repeating it on a follow-up"},
+                "term_a_id": {"type": "integer"},
+                "term_b_id": {"type": "integer"},
+                "final_round": {"type": "string", "description": "'true' on the last round: skip generating a follow-up question nothing will use"},
                 "call_id": {"type": "string"},
             },
-            ["triage_answer", "hip_term_id", "spine_term_id"],
+            ["triage_answer", "term_a_id", "term_b_id"],
         ),
     ),
 ]
