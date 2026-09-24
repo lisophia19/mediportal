@@ -620,7 +620,13 @@ nodes = [
             out("urgent_window_met", "BOOLEAN", nullable=True),
             out("different_practice_name", "STRING", nullable=True),
         ],
-        started_message="Great, let me check {{node.find_requested_doctor_fn.best_doctor_spoken_label}}'s availability.",
+        started_message=(
+            "If {{node.find_requested_doctor_fn.spoken_response}} is not blank, say that "
+            "verbatim first -- it's the honest reason a substitute doctor was chosen (the "
+            "caller's requested doctor/office/gender wasn't fully available), and must "
+            "always be said, never silently skipped. Then say: Great, let me check "
+            "{{node.find_requested_doctor_fn.best_doctor_spoken_label}}'s availability."
+        ),
         transitions=[
             equal("check_requested_availability_fn", "status", "slots_available", "present_requested_slots"),
             equal("check_requested_availability_fn", "status", "no_slots", "dead_end_no_slots"),
