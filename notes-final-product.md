@@ -20,6 +20,15 @@ it freely as more requirements surface. Nothing here is committed to or schedule
 - **Pain Management, Physiatry, Neurology.** Still deferred — Orlin & Cohen's
   providers in these specialties are explicitly excluded from the seed (see below),
   not just unaddressed.
+- **Data-quality finding (live-call testing, 2026-09-23): Dr. John Feder (Foot and
+  Ankle) has real `term_eligibility` rows in the sheet for clearly unrelated terms**
+  (`Pain-Neck`, `Pain-Groin`/hip, seen across 3 of 12 live test calls) — the agent
+  correctly followed the real data and routed neck/hip complaints to him before the
+  caller had to correct it. Same class of issue as the MRI-duplicate-row and
+  Fracchia/Fracture-Wrist findings; seeded as the sheet states, not silently
+  filtered (no doctor-to-issue mapping is hardcoded, per the core design
+  constraint) — worth flagging to the practice directly given how often it
+  surfaced.
 - ~~**Full provider directory.**~~ Done — the seed now includes Orlin & Cohen's
   orthopedic providers alongside the original 10 LIBJ doctors (59 total; O&C's Pain
   Management/Physiatry/Neurology providers excluded as non-ortho). Still not

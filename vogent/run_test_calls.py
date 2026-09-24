@@ -210,14 +210,13 @@ SCENARIOS = {
         "the booking."
     ),
     "named_doctor_age_restricted": (
-        "You are a NEW patient calling about your 8 year old child's foot "
-        "pain -- you are calling on the child's behalf but give the "
-        "child's own date of birth when asked. When asked if you have a "
-        "specific doctor in mind, say you'd like to see Dr. Yu. If the "
-        "agent explains Dr. Yu doesn't see patients this age and offers a "
-        "different doctor instead, accept that doctor. Name the patient "
-        "Riley Yu-- no relation, phone 703-555-0173, ZIP 11777, date of "
-        "birth should make them 8 years old today. Complete the booking."
+        "You are a NEW patient, 25 years old, calling about hip pain you "
+        "believe is arthritis. When asked if you have a specific doctor in "
+        "mind, say you'd like to see Dr. Munn. If the agent explains Dr. "
+        "Munn doesn't see patients your age for this and offers a "
+        "different doctor instead, accept that doctor. Name Avery Kessler, "
+        "date of birth should make you 25 years old today, phone "
+        "703-555-0173, ZIP 11530. Complete the booking."
     ),
     "gender_only_preference": (
         "You are a NEW patient with shoulder pain that's been bothering "
@@ -229,13 +228,15 @@ SCENARIOS = {
     ),
     "named_doctor_and_gender_mismatch": (
         "You are a NEW patient with hip pain. When asked if you have a "
-        "specific doctor or office in mind, say you'd like to see Dr. "
-        "Fracchia, but mention you'd have preferred a woman doctor if one "
-        "treated this. If the agent tells you they don't have a doctor of "
-        "that gender who treats this but can still book you with Dr. "
-        "Fracchia, accept that and complete the booking. Name Jordan "
-        "Pruitt, date of birth July 19th 1985, phone 703-555-0175, ZIP "
-        "11747."
+        "specific doctor or office in mind, say clearly and specifically: "
+        "'Yes, I'd like to see Dr. Fracchia please -- he was recommended "
+        "to me. Just so you know, I'd generally prefer a female doctor, "
+        "but Dr. Fracchia specifically is who I want.' Make it unambiguous "
+        "that Dr. Fracchia is still your firm choice despite the gender "
+        "comment. If the agent proceeds with Dr. Fracchia (mentioning or "
+        "not mentioning the gender preference), accept that and complete "
+        "the booking. Name Jordan Pruitt, date of birth July 19th 1985, "
+        "phone 703-555-0175, ZIP 11747."
     ),
     # --- imaging prerequisite (call 4) ------------------------------------
     "prerequisite_not_done": (

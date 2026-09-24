@@ -661,11 +661,12 @@ nodes = [
             out("status", "STRING"),
             out("appointment_id", "INTEGER", nullable=True),
             out("confirmation", "CUSTOM", nullable=True, custom_schema=CONFIRMATION_SCHEMA),
+            out("alternate_slots", "CUSTOM", nullable=True, custom_schema=SLOTS_ARRAY_SCHEMA),
         ],
         started_message="Great, let me get that booked for you.",
         transitions=[
             equal("book_requested_appointment_fn", "status", "scheduled", "log_scheduled_requested_fn"),
-            equal("book_requested_appointment_fn", "status", "slot_taken", "dead_end_no_slots"),
+            equal("book_requested_appointment_fn", "status", "slot_taken", "present_book_requested_appointment_alternates"),
             always("dead_end_system_error"),
         ],
     ),
@@ -803,11 +804,12 @@ nodes = [
             out("status", "STRING"),
             out("appointment_id", "INTEGER", nullable=True),
             out("confirmation", "CUSTOM", nullable=True, custom_schema=CONFIRMATION_SCHEMA),
+            out("alternate_slots", "CUSTOM", nullable=True, custom_schema=SLOTS_ARRAY_SCHEMA),
         ],
         started_message="Great, let me get that booked for you.",
         transitions=[
             equal("book_chosen_appointment_fn", "status", "scheduled", "log_scheduled_chosen_fn"),
-            equal("book_chosen_appointment_fn", "status", "slot_taken", "dead_end_no_slots"),
+            equal("book_chosen_appointment_fn", "status", "slot_taken", "present_book_chosen_appointment_alternates"),
             always("dead_end_system_error"),
         ],
     ),
@@ -1272,11 +1274,12 @@ nodes = [
             out("status", "STRING"),
             out("appointment_id", "INTEGER", nullable=True),
             out("confirmation", "CUSTOM", nullable=True, custom_schema=CONFIRMATION_SCHEMA),
+            out("alternate_slots", "CUSTOM", nullable=True, custom_schema=SLOTS_ARRAY_SCHEMA),
         ],
         started_message="Great, let me get that booked for you.",
         transitions=[
             equal("book_more_appointment_fn", "status", "scheduled", "log_scheduled_more_fn"),
-            equal("book_more_appointment_fn", "status", "slot_taken", "dead_end_no_slots"),
+            equal("book_more_appointment_fn", "status", "slot_taken", "present_book_more_appointment_alternates"),
             always("dead_end_system_error"),
         ],
     ),
@@ -1341,11 +1344,12 @@ nodes = [
             out("status", "STRING"),
             out("appointment_id", "INTEGER", nullable=True),
             out("confirmation", "CUSTOM", nullable=True, custom_schema=CONFIRMATION_SCHEMA),
+            out("alternate_slots", "CUSTOM", nullable=True, custom_schema=SLOTS_ARRAY_SCHEMA),
         ],
         started_message="Great, let me get that booked for you.",
         transitions=[
             equal("book_after_concern_fn", "status", "scheduled", "log_scheduled_after_concern_fn"),
-            equal("book_after_concern_fn", "status", "slot_taken", "dead_end_no_slots"),
+            equal("book_after_concern_fn", "status", "slot_taken", "present_book_after_concern_alternates"),
             always("dead_end_system_error"),
         ],
     ),
@@ -1448,11 +1452,12 @@ nodes = [
             out("status", "STRING"),
             out("appointment_id", "INTEGER", nullable=True),
             out("confirmation", "CUSTOM", nullable=True, custom_schema=CONFIRMATION_SCHEMA),
+            out("alternate_slots", "CUSTOM", nullable=True, custom_schema=SLOTS_ARRAY_SCHEMA),
         ],
         started_message="Great, let me get that booked for you.",
         transitions=[
             equal("book_next_doctor_appointment_fn", "status", "scheduled", "log_scheduled_next_doctor_fn"),
-            equal("book_next_doctor_appointment_fn", "status", "slot_taken", "dead_end_no_slots"),
+            equal("book_next_doctor_appointment_fn", "status", "slot_taken", "present_book_next_doctor_appointment_alternates"),
             always("dead_end_system_error"),
         ],
     ),
@@ -1515,11 +1520,12 @@ nodes = [
             out("status", "STRING"),
             out("appointment_id", "INTEGER", nullable=True),
             out("confirmation", "CUSTOM", nullable=True, custom_schema=CONFIRMATION_SCHEMA),
+            out("alternate_slots", "CUSTOM", nullable=True, custom_schema=SLOTS_ARRAY_SCHEMA),
         ],
         started_message="Great, let me get that booked for you.",
         transitions=[
             equal("book_fallback_appointment_fn", "status", "scheduled", "log_scheduled_fallback_fn"),
-            equal("book_fallback_appointment_fn", "status", "slot_taken", "dead_end_no_slots"),
+            equal("book_fallback_appointment_fn", "status", "slot_taken", "present_book_fallback_appointment_alternates"),
             always("dead_end_system_error"),
         ],
     ),
@@ -1552,11 +1558,12 @@ nodes = [
             out("status", "STRING"),
             out("appointment_id", "INTEGER", nullable=True),
             out("confirmation", "CUSTOM", nullable=True, custom_schema=CONFIRMATION_SCHEMA),
+            out("alternate_slots", "CUSTOM", nullable=True, custom_schema=SLOTS_ARRAY_SCHEMA),
         ],
         started_message="Great, let me get that booked for you.",
         transitions=[
             equal("book_appointment_fn", "status", "scheduled", "log_scheduled_fn"),
-            equal("book_appointment_fn", "status", "slot_taken", "dead_end_no_slots"),
+            equal("book_appointment_fn", "status", "slot_taken", "present_book_appointment_alternates"),
             always("dead_end_system_error"),
         ],
     ),
@@ -1648,6 +1655,93 @@ nodes = [
         ),
     ),
 ]
+
+
+def _slot_taken_retry_chain(book_node_id):
+    """Spec §8a: on a booking race (409 slot_taken), re-offer the real
+    alternate_slots the backend already computed rather than silently
+    discarding them for a bare apology -- one retry attempt, then the same
+    honest dead end on a second miss. Each of the 7 book_appointment call
+    sites gets its own copy of this 4-node chain (present -> retry book ->
+    log -> confirm), the same "duplicate per static-template source"
+    pattern already used throughout this file, generated here instead of
+    hand-repeated 7 times."""
+    base = book_node_id[:-3] if book_node_id.endswith("_fn") else book_node_id
+    present_id = f"present_{base}_alternates"
+    retry_fn_id = f"{base}_retry_fn"
+    log_id = f"log_scheduled_{base}_retry_fn"
+    confirm_id = f"confirm_booking_{base}_retry"
+    return [
+        question_node(
+            present_id, present_id.replace("_", "-"),
+            (
+                "Apologize briefly -- the time they picked was just taken by "
+                "another caller. Read out up to 3 alternate times, phrased "
+                f"conversationally, from this list: {{{{node.{book_node_id}.alternate_slots}}}}. "
+                "If the list is empty, apologize and let them know someone from "
+                "the office will call back to help find a time."
+            ),
+            answer_guidelines=(
+                "If the caller picks one of the listed times, respond with the "
+                "exact slot_id integer of that slot, copied from the list above "
+                "-- never a time string. If they don't want any of them, or the "
+                "list was empty, respond with exactly NONE."
+            ),
+            transitions=[
+                equal(present_id, "answer", "NONE", "dead_end_no_slots"),
+                always(retry_fn_id),
+            ],
+        ),
+        function_node(
+            retry_fn_id, retry_fn_id.replace("_", "-"), "book_appointment",
+            inputs={"slot_id": f"{{{{node.{present_id}.answer}}}}"},
+            outputs=[
+                out("status", "STRING"),
+                out("appointment_id", "INTEGER", nullable=True),
+                out("confirmation", "CUSTOM", nullable=True, custom_schema=CONFIRMATION_SCHEMA),
+            ],
+            started_message="Let me try booking that for you.",
+            transitions=[
+                equal(retry_fn_id, "status", "scheduled", log_id),
+                # A second race in the same call is bad enough luck that an
+                # honest dead end beats a 3rd attempt.
+                always("dead_end_no_slots"),
+            ],
+        ),
+        function_node(
+            log_id, log_id.replace("_", "-"), "complete_call",
+            inputs={
+                "status": "scheduled",
+                "appointment_id": f"{{{{node.{retry_fn_id}.appointment_id}}}}",
+            },
+            outputs=[out("status", "STRING")],
+            transitions=[always(confirm_id)],
+        ),
+        freeform_node(
+            confirm_id, confirm_id.replace("_", "-"),
+            (
+                f"Confirm the booking to the caller: {{{{node.{retry_fn_id}.confirmation.doctor}}}} "
+                f"at {{{{node.{retry_fn_id}.confirmation.practice}}}}, "
+                f"{{{{node.{retry_fn_id}.confirmation.when}}}}, a "
+                f"{{{{node.{retry_fn_id}.confirmation.appointment_type}}}} appointment. Read it "
+                "back naturally and clearly. Then ask if there is anything else you can help "
+                "with. Wait for their response. Once they say there is nothing else, thank "
+                "them and say <|hangup|>."
+            ),
+        ),
+    ]
+
+
+for _book_node_id in (
+    "book_requested_appointment_fn",
+    "book_chosen_appointment_fn",
+    "book_more_appointment_fn",
+    "book_after_concern_fn",
+    "book_next_doctor_appointment_fn",
+    "book_fallback_appointment_fn",
+    "book_appointment_fn",
+):
+    nodes.extend(_slot_taken_retry_chain(_book_node_id))
 
 
 def build_and_publish():
