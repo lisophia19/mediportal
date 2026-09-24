@@ -1146,6 +1146,62 @@ def test_find_doctor_by_name_matches_doctor_no_office_named(client, db, agent_he
     assert body["best_doctor_id"] == doctor.id
 
 
+def test_find_doctor_by_name_persists_requested_doctor_on_call(client, db, agent_headers, monkeypatch):
+    """The real, active doctor a caller names by name is persisted onto the
+    call row regardless of eligibility/booking outcome -- so a later
+    "concern" retry in the same call, or the dashboard, can still see who
+    was actually asked for."""
+    term = _make_term(db)
+    practice = _make_practice(db, "Melville", "11747", lat=40.79, lon=-73.42)
+    doctor = _make_doctor(db, "Michael", "Fracchia", "Joint Reconstruction", practice)
+    db.add(TermEligibility(term_id=term.id, doctor_id=doctor.id, min_age=1, max_age=100))
+    call = Call(vogent_call_id="vg_persist1")
+    db.add(call)
+    db.commit()
+    _mock_extraction(monkeypatch, doctor_name="Fracchia")
+
+    client.post(
+        "/api/v1/routing/find-doctor-by-name",
+        json={
+            "doctor_office_text": "Dr. Fracchia",
+            "term_id": term.id,
+            "date_of_birth": "1970-01-01",
+            "call_id": "vg_persist1",
+        },
+        headers=agent_headers,
+    )
+    db.refresh(call)
+    assert call.requested_doctor_id == doctor.id
+
+
+def test_find_doctor_by_name_no_real_doctor_named_leaves_call_field_unset(
+    client, db, agent_headers, monkeypatch
+):
+    """No real doctor was ever named (gender-only or unrecognized-name
+    cases) -- must not persist a stale/wrong requested_doctor_id."""
+    term = _make_term(db)
+    practice = _make_practice(db, "Melville", "11747", lat=40.79, lon=-73.42)
+    doctor = _make_doctor(db, "Rachel", "Chen", "Joint Reconstruction", practice, gender="female")
+    db.add(TermEligibility(term_id=term.id, doctor_id=doctor.id, min_age=1, max_age=100))
+    call = Call(vogent_call_id="vg_persist2")
+    db.add(call)
+    db.commit()
+    _mock_extraction(monkeypatch, gender_preference="female")
+
+    client.post(
+        "/api/v1/routing/find-doctor-by-name",
+        json={
+            "doctor_office_text": "No one specific, but a woman doctor please",
+            "term_id": term.id,
+            "date_of_birth": "1970-01-01",
+            "call_id": "vg_persist2",
+        },
+        headers=agent_headers,
+    )
+    db.refresh(call)
+    assert call.requested_doctor_id is None
+
+
 def test_find_doctor_by_name_matches_doctor_and_office(client, db, agent_headers, monkeypatch):
     term = _make_term(db)
     practice = _make_practice(db, "Melville", "11747", lat=40.79, lon=-73.42)

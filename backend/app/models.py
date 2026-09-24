@@ -342,6 +342,12 @@ class Call(db.Model):
     transcript = db.Column(JSONB, nullable=False, default=list)
     matched_term_id = db.Column(db.Integer, db.ForeignKey("terms.id"))
     raw_complaint = db.Column(db.Text)
+    # The real, active doctor a caller named by name (find_doctor_by_name),
+    # regardless of whether they ended up being who was actually booked --
+    # lets a later "concern" retry in the same call refer back to who was
+    # originally asked for, and gives the call-review dashboard that fact
+    # even when the final appointment is with someone else.
+    requested_doctor_id = db.Column(db.Integer, db.ForeignKey("doctors.id"))
 
     __table_args__ = (
         CheckConstraint(

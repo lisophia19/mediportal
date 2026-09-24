@@ -653,12 +653,133 @@ nodes = [
         answer_guidelines=(
             "If the caller CLEARLY picks one of the listed times, respond with the "
             "exact slot_id integer. If they have no preference, respond with the "
-            "slot_id of the soonest slot. Otherwise, respond with exactly NONE."
+            "slot_id of the soonest slot. If they are asking to go back to a "
+            "different doctor or office than the one just offered -- including the "
+            "one they originally asked for, if it's not who was offered -- respond "
+            "with exactly CONCERN. Otherwise, respond with exactly NONE."
         ),
         transitions=[
             equal("present_requested_slots", "answer", "NONE", "dead_end_no_slots"),
+            equal("present_requested_slots", "answer", "CONCERN", "ask_requested_doctor_retry"),
             always("book_requested_appointment_fn"),
         ],
+    ),
+    # One retry, using the caller's fresh restatement of who they want --
+    # not a replay of the original answer, since that's exactly the text
+    # that may have led to the wrong pick the first time (e.g. Vogent's own
+    # answer-capture step paraphrasing away a doctor's name). Bounded to
+    # one attempt, same as every other retry in this flow.
+    question_node(
+        "ask_requested_doctor_retry", "ask-requested-doctor-retry",
+        "Apologize briefly, then ask which doctor or office they'd like you to check for them.",
+        answer_guidelines="Capture what the caller says about the doctor and/or office as close to verbatim as possible -- do not paraphrase or summarize.",
+        transitions=[always("find_requested_doctor_retry_fn")],
+    ),
+    function_node(
+        "find_requested_doctor_retry_fn", "find-requested-doctor-retry-fn", "find_doctor_by_name",
+        inputs={
+            "doctor_office_text": "{{node.ask_requested_doctor_retry.answer}}",
+            "date_of_birth": "{{node.ask_dob.answer}}",
+            "zip": "{{node.ask_zip.answer}}",
+        },
+        outputs=[
+            out("status", "STRING"),
+            out("term_urgency", "STRING", nullable=True),
+            out("best_doctor_id", "INTEGER", nullable=True),
+            out("best_practice_id", "INTEGER", nullable=True),
+            out("best_doctor_spoken_label", "STRING", nullable=True),
+            out("best_doctor_name", "STRING", nullable=True),
+            out("spoken_response", "STRING", nullable=True),
+        ],
+        transitions=[
+            equal("find_requested_doctor_retry_fn", "status", "matched", "check_requested_availability_retry_fn"),
+            # A second needs_choice or no_eligible_doctor is bad enough luck
+            # that an honest dead end beats a 3rd doctor-resolution attempt.
+            always("dead_end_no_requested_doctor"),
+        ],
+    ),
+    function_node(
+        "check_requested_availability_retry_fn", "check-requested-availability-retry-fn", "get_availability",
+        inputs={
+            "doctor_id": "{{node.find_requested_doctor_retry_fn.best_doctor_id}}",
+            "practice_id": "{{node.find_requested_doctor_retry_fn.best_practice_id}}",
+            "urgency": "{{node.find_requested_doctor_retry_fn.term_urgency}}",
+        },
+        outputs=[
+            out("status", "STRING"),
+            out("slots", "CUSTOM", nullable=True, custom_schema=SLOTS_ARRAY_SCHEMA),
+            out("urgent_window_met", "BOOLEAN", nullable=True),
+            out("different_practice_name", "STRING", nullable=True),
+        ],
+        started_message=(
+            "If {{node.find_requested_doctor_retry_fn.spoken_response}} is not blank, "
+            "say that verbatim first. Then say: Great, let me check "
+            "{{node.find_requested_doctor_retry_fn.best_doctor_spoken_label}}'s availability."
+        ),
+        transitions=[
+            equal("check_requested_availability_retry_fn", "status", "slots_available", "present_requested_slots_retry"),
+            equal("check_requested_availability_retry_fn", "status", "no_slots", "dead_end_no_slots"),
+            always("dead_end_system_error"),
+        ],
+    ),
+    question_node(
+        "present_requested_slots_retry", "present-requested-slots-retry",
+        (
+            "Let the caller know you found some openings with "
+            "{{node.find_requested_doctor_retry_fn.best_doctor_name}}. Read out up to "
+            "3 of the soonest options, phrased conversationally, never a raw "
+            "timestamp: {{node.check_requested_availability_retry_fn.slots}}. If "
+            "{{node.check_requested_availability_retry_fn.different_practice_name}} is "
+            "not blank, say plainly these openings are at that office instead."
+        ),
+        answer_guidelines=(
+            "If the caller picks one of the listed times, respond with the exact "
+            "slot_id integer. If they have no preference, respond with the slot_id "
+            "of the soonest slot. Otherwise, respond with exactly NONE."
+        ),
+        transitions=[
+            equal("present_requested_slots_retry", "answer", "NONE", "dead_end_no_slots"),
+            always("book_requested_appointment_concern_retry_fn"),
+        ],
+    ),
+    function_node(
+        "book_requested_appointment_concern_retry_fn", "book-requested-appointment-retry-fn", "book_appointment",
+        inputs={"slot_id": "{{node.present_requested_slots_retry.answer}}"},
+        outputs=[
+            out("status", "STRING"),
+            out("appointment_id", "INTEGER", nullable=True),
+            out("confirmation", "CUSTOM", nullable=True, custom_schema=CONFIRMATION_SCHEMA),
+        ],
+        started_message="Great, let me get that booked for you.",
+        transitions=[
+            equal("book_requested_appointment_concern_retry_fn", "status", "scheduled", "log_scheduled_requested_retry_fn"),
+            # A race on the retry-of-a-retry is rare enough to end honestly
+            # rather than building a 3rd alternate-offering chain for it.
+            equal("book_requested_appointment_concern_retry_fn", "status", "slot_taken", "dead_end_no_slots"),
+            always("dead_end_system_error"),
+        ],
+    ),
+    function_node(
+        "log_scheduled_requested_retry_fn", "log-scheduled-requested-retry-fn", "complete_call",
+        inputs={
+            "status": "scheduled",
+            "appointment_id": "{{node.book_requested_appointment_concern_retry_fn.appointment_id}}",
+        },
+        outputs=[out("status", "STRING")],
+        transitions=[always("confirm_booking_requested_retry")],
+    ),
+    freeform_node(
+        "confirm_booking_requested_retry", "confirm-booking-requested-retry",
+        (
+            "Confirm the booking to the caller: "
+            "{{node.book_requested_appointment_concern_retry_fn.confirmation.doctor}} at "
+            "{{node.book_requested_appointment_concern_retry_fn.confirmation.practice}}, "
+            "{{node.book_requested_appointment_concern_retry_fn.confirmation.when}}, a "
+            "{{node.book_requested_appointment_concern_retry_fn.confirmation.appointment_type}} "
+            "appointment. Read it back naturally and clearly. Then ask if there is "
+            "anything else you can help with. Wait for their response. Once they "
+            "say there is nothing else, thank them and say <|hangup|>."
+        ),
     ),
     function_node(
         "book_requested_appointment_fn", "book-requested-appointment-fn", "book_appointment",

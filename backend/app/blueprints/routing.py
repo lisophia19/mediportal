@@ -832,9 +832,9 @@ def find_doctor_by_name():
     zip_value = payload.get("zip")
     call_id = payload.get("call_id")
 
-    if not term_id and call_id:
-        call = Call.query.filter_by(vogent_call_id=call_id).first()
-        term_id = call.matched_term_id if call else None
+    call = Call.query.filter_by(vogent_call_id=call_id).first() if call_id else None
+    if not term_id and call:
+        term_id = call.matched_term_id
 
     if not doctor_office_text or not term_id or not dob_raw or not call_id:
         return (
@@ -870,6 +870,12 @@ def find_doctor_by_name():
     named_doctor = _best_fuzzy_match(
         doctor_name, active_doctors, lambda d: format_doctor_name(d) or "", DOCTOR_MATCH_SCORE_FLOOR
     )
+    # Persisted regardless of eligibility/booking outcome -- a later
+    # "concern" retry in the same call, or the dashboard, can still see who
+    # was actually asked for even when someone else ends up booked.
+    if call and named_doctor is not None:
+        call.requested_doctor_id = named_doctor.id
+        db.session.commit()
     # Fuzzy-match the office against EVERY practice, not just a named
     # doctor's own -- matching only within one doctor's practices would make
     # it structurally impossible to ever detect a doctor/office mismatch.
