@@ -252,7 +252,17 @@ GLOBAL_CONTEXT = (
     "to gather, small talk about scheduling preferences with no field for it), give a "
     "brief, honest acknowledgment and return immediately to whatever you were asking "
     "before -- do not keep the side conversation going, and do not treat it as a "
-    "reason to skip calling the function the current step actually calls for."
+    "reason to skip calling the function the current step actually calls for.\n\n"
+    "Hard cutoff on small talk: ask ONLY what the current step actually asks for, "
+    "nothing more. Never proactively ask about injury history, symptom onset, pain "
+    "triggers, imaging already done, insurance, email address, or day/time "
+    "preferences unless a step explicitly asks that specific question -- these are "
+    "not fields this system collects, and asking them adds nothing but delay. The "
+    "moment the caller has answered the CURRENT question, immediately call whatever "
+    "function or ask whatever question comes next -- do not add an extra "
+    "conversational turn, comment, or follow-up question in between. This is a "
+    "booking line, not an intake interview; keep every turn strictly to collecting "
+    "the one next thing needed to book the appointment."
 )
 
 nodes = [
