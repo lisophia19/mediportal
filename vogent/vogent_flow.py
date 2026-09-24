@@ -130,14 +130,19 @@ def function_node(node_id, name, function_name, inputs, outputs, transitions, st
     }
 
 
-def freeform_node(node_id, name, prompt):
+def freeform_node(node_id, name, prompt, transitions=None):
+    """Every existing use is a terminal dead end (transitions=None -> [],
+    prompt ends in <|hangup|>) -- transitions is for the one exception: a
+    node that just speaks something conditional (full instruction-following
+    prompt, unlike functionStartedMessage's literal-text-only field) and
+    then continues on its own, no caller answer needed."""
     return {
         "id": node_id,
         "name": name,
         "type": "freeform",
         "nodeData": {"prompt": prompt, "outputs": None},
         "outputSchema": None,
-        "transitionRules": [],
+        "transitionRules": transitions or [],
     }
 
 
@@ -601,11 +606,26 @@ nodes = [
             out("spoken_response", "STRING", nullable=True),
         ],
         transitions=[
-            equal("find_requested_doctor_fn", "status", "matched", "check_requested_availability_fn"),
+            equal("find_requested_doctor_fn", "status", "matched", "explain_requested_substitution"),
             equal("find_requested_doctor_fn", "status", "needs_choice", "choose_requested_doctor_option"),
             equal("find_requested_doctor_fn", "status", "no_eligible_doctor", "dead_end_no_requested_doctor"),
             always("dead_end_system_error"),
         ],
+    ),
+    # functionStartedMessage is literal-text-only (confirmed the hard way --
+    # an earlier conditional version here got spoken as raw instruction
+    # text, not interpreted). A real conditional needs an actual prompt
+    # node instead, which is what this is: speaks the honest substitution
+    # reason when there is one, silently continues when there isn't.
+    freeform_node(
+        "explain_requested_substitution", "explain-requested-substitution",
+        (
+            "If {{node.find_requested_doctor_fn.spoken_response}} is blank or empty, "
+            "say nothing and continue immediately. Otherwise say "
+            "{{node.find_requested_doctor_fn.spoken_response}} verbatim -- it's the "
+            "honest reason a substitute doctor was chosen -- then continue."
+        ),
+        transitions=[always("check_requested_availability_fn")],
     ),
     function_node(
         "check_requested_availability_fn", "check-requested-availability-fn", "get_availability",
@@ -620,13 +640,7 @@ nodes = [
             out("urgent_window_met", "BOOLEAN", nullable=True),
             out("different_practice_name", "STRING", nullable=True),
         ],
-        started_message=(
-            "If {{node.find_requested_doctor_fn.spoken_response}} is not blank, say that "
-            "verbatim first -- it's the honest reason a substitute doctor was chosen (the "
-            "caller's requested doctor/office/gender wasn't fully available), and must "
-            "always be said, never silently skipped. Then say: Great, let me check "
-            "{{node.find_requested_doctor_fn.best_doctor_spoken_label}}'s availability."
-        ),
+        started_message="Great, let me check {{node.find_requested_doctor_fn.best_doctor_spoken_label}}'s availability.",
         transitions=[
             equal("check_requested_availability_fn", "status", "slots_available", "present_requested_slots"),
             equal("check_requested_availability_fn", "status", "no_slots", "dead_end_no_slots"),
@@ -692,11 +706,21 @@ nodes = [
             out("spoken_response", "STRING", nullable=True),
         ],
         transitions=[
-            equal("find_requested_doctor_retry_fn", "status", "matched", "check_requested_availability_retry_fn"),
+            equal("find_requested_doctor_retry_fn", "status", "matched", "explain_requested_retry_substitution"),
             # A second needs_choice or no_eligible_doctor is bad enough luck
             # that an honest dead end beats a 3rd doctor-resolution attempt.
             always("dead_end_no_requested_doctor"),
         ],
+    ),
+    freeform_node(
+        "explain_requested_retry_substitution", "explain-requested-retry-substitution",
+        (
+            "If {{node.find_requested_doctor_retry_fn.spoken_response}} is blank or "
+            "empty, say nothing and continue immediately. Otherwise say "
+            "{{node.find_requested_doctor_retry_fn.spoken_response}} verbatim, then "
+            "continue."
+        ),
+        transitions=[always("check_requested_availability_retry_fn")],
     ),
     function_node(
         "check_requested_availability_retry_fn", "check-requested-availability-retry-fn", "get_availability",
@@ -711,11 +735,7 @@ nodes = [
             out("urgent_window_met", "BOOLEAN", nullable=True),
             out("different_practice_name", "STRING", nullable=True),
         ],
-        started_message=(
-            "If {{node.find_requested_doctor_retry_fn.spoken_response}} is not blank, "
-            "say that verbatim first. Then say: Great, let me check "
-            "{{node.find_requested_doctor_retry_fn.best_doctor_spoken_label}}'s availability."
-        ),
+        started_message="Great, let me check {{node.find_requested_doctor_retry_fn.best_doctor_spoken_label}}'s availability.",
         transitions=[
             equal("check_requested_availability_retry_fn", "status", "slots_available", "present_requested_slots_retry"),
             equal("check_requested_availability_retry_fn", "status", "no_slots", "dead_end_no_slots"),
