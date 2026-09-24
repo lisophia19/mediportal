@@ -146,18 +146,22 @@ not just carried forward as passing.
 
 ### Named doctor / office (call 3)
 
-- [ ] **`named_doctor_right_office`** — names a doctor who is real, eligible, and at an office they actually practice at.
+- [x] **`named_doctor_right_office`** *(passed 2026-09-23)* — names a doctor who is real, eligible, and at an office they actually practice at.
       *Expect:* pinned directly, no ranking prompt, no age/eligibility bypass.
-- [ ] **`named_doctor_wrong_office`** — names a real doctor at an office they don't practice at.
+- [x] **`named_doctor_wrong_office`** *(passed 2026-09-23)* — names a real doctor at an office they don't practice at.
       *Expect:* `needs_choice` -- offered that doctor's real office, or a different eligible doctor at the requested office.
-- [ ] **`named_doctor_age_restricted`** — names a doctor who doesn't treat patients this age.
+- [x] **`named_doctor_age_restricted`** *(passed 2026-09-24, after fixing the scenario's own false premise -- Dr. Yu's real data has no age restriction; switched to Dr. Munn, who genuinely has one)* — names a doctor who doesn't treat patients this age.
       *Expect:* honest age-restricted explanation, falls back to an eligible doctor instead of silently booking or swapping without saying why.
+- [ ] **`office_only_no_doctor_named`** — names an office but no doctor.
+      *Expect:* pinned to an eligible doctor who's actually at that office (the office-only routing fix), not the generic by-distance pick.
+- [ ] **`named_doctor_concern_retry`** — names a real doctor who genuinely doesn't treat this (wrong specialty, not an extraction miss), then explicitly pushes back once asking to check a different specialist.
+      *Expect:* honest substitution reason spoken (not silently skipped, not leaked as literal instruction text), then the concern-retry path finds a real shoulder/upper-extremity specialist on the second attempt.
 
 ### Gender preference
 
-- [ ] **`gender_only_preference`** — states a gender preference, no specific doctor or office.
+- [x] **`gender_only_preference`** *(passed 2026-09-23)* — states a gender preference, no specific doctor or office.
       *Expect:* pinned to an eligible doctor of that gender, not the generic by-distance pick.
-- [ ] **`named_doctor_and_gender_mismatch`** — names a real, eligible doctor whose gender doesn't match the stated preference.
+- [~] **`named_doctor_and_gender_mismatch`** *(ran 2026-09-23/24 -- surfaced and fixed 3 real bugs: a major anthropic SDK incompatibility causing intermittent extraction failures, the honest-explanation-never-spoken bug, and the missing concern-retry path. Final run: explanation spoke cleanly and the concern-retry path engaged correctly, but real speech-to-text mishearing of "Fracchia" as "Fratia"/"Frakia" -- both below the fuzzy-match floor -- prevented a clean resolution. Not a code bug; a real STT-accuracy limit. Re-run if worth confirming against a clearer-sounding name.)* — names a real, eligible doctor whose gender doesn't match the stated preference.
       *Expect:* still books the named doctor, but says honestly that the gender preference wasn't matched rather than silently ignoring it.
 
 ### Imaging prerequisite (call 4)

@@ -218,6 +218,29 @@ SCENARIOS = {
         "date of birth should make you 25 years old today, phone "
         "703-555-0173, ZIP 11530. Complete the booking."
     ),
+    "office_only_no_doctor_named": (
+        "You are a NEW patient with hip pain that's been building for "
+        "weeks. When asked if you have a specific doctor or office in "
+        "mind, say you don't have a specific doctor in mind, but you'd "
+        "like to be seen at the Southampton office specifically -- your "
+        "sister goes there and it's convenient for you. Don't name any "
+        "doctor. Accept whichever doctor the agent finds for you at that "
+        "office. Name Drew Callahan, date of birth April 3rd 1979, phone "
+        "703-555-0182, ZIP 11968. Complete the booking."
+    ),
+    "named_doctor_concern_retry": (
+        "You are a NEW patient with shoulder pain. When asked if you have "
+        "a specific doctor or office in mind, say you'd like to see Dr. "
+        "Munn specifically -- a friend recommended him. He does NOT treat "
+        "shoulder issues (he's a hip and knee specialist), so the agent "
+        "will offer you a different doctor instead and explain why. "
+        "Politely push back once: say you'd really rather see a shoulder "
+        "specialist directly, and ask the agent to check specifically for "
+        "one instead of the doctor just offered. When the agent comes "
+        "back with a real shoulder/upper-extremity specialist, accept "
+        "that and complete the booking. Name Casey Ferrante, date of "
+        "birth March 15th 1982, phone 703-555-0183, ZIP 11747."
+    ),
     "gender_only_preference": (
         "You are a NEW patient with shoulder pain that's been bothering "
         "you for a couple of weeks. When asked if you have a specific "
