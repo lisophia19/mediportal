@@ -592,9 +592,8 @@ nodes = [
     question_node(
         "ask_doctor_preference", "ask-doctor-preference",
         (
-            "Before I check availability, did you have a specific doctor or office "
-            "in mind, or a preference for a male or female doctor, or would you like "
-            "me to find the right specialist for you?"
+            "Do you have any preferences in location, doctor gender, or a specific "
+            "doctor?"
         ),
         answer_guidelines=(
             "If the caller has no preference of any kind -- no doctor, no office, no "

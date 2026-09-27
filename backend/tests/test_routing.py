@@ -411,6 +411,90 @@ def test_match_issue_ambiguous_hip_vs_spine_triggers_triage(client, db, agent_he
     assert "triage_question" in body
 
 
+def test_match_issue_follow_up_skips_triage_takes_best_guess(client, db, agent_headers, monkeypatch):
+    """A returning patient scheduling a follow-up isn't describing a new
+    problem to diagnose -- an otherwise-ambiguous pair must resolve straight
+    to the top match instead of entering the triage loop, so the call keeps
+    moving to patient identification (and the prerequisite/MRI check)
+    instead of stalling on a disambiguating question."""
+    term_a = _make_term(db, term="Pain-Hip", body_part="Hip", category="pain")
+    term_b = _make_term(db, term="Pain-Back", body_part="Back/Neck", category="pain")
+    db.commit()
+    _mock_llm(
+        monkeypatch,
+        {
+            "ortho_relevant": True,
+            "matches": [
+                {"term_id": term_a.id, "confidence": 0.5, "spoken_label": "hip pain"},
+                {"term_id": term_b.id, "confidence": 0.45, "spoken_label": "back pain"},
+            ],
+        },
+    )
+
+    resp = client.post(
+        "/api/v1/routing/match-issue",
+        json={"complaint_text": "I'm here for a follow-up on my hip pain", "call_id": "vg_followup"},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched"
+    assert body["term"]["id"] == term_a.id
+
+
+def test_match_issue_bare_follow_up_asks_instead_of_matching(client, db, agent_headers, monkeypatch):
+    """"I have a follow-up" alone carries no clinical signal -- same
+    deterministic no-LLM path as any other content-free complaint, not a
+    triage question."""
+    called = {"n": 0}
+
+    def _boom(*args, **kwargs):
+        called["n"] += 1
+        raise AssertionError("LLM should never be called for a content-free complaint")
+
+    monkeypatch.setattr(routing_module, "_classify_complaint", _boom)
+
+    resp = client.post(
+        "/api/v1/routing/match-issue",
+        json={"complaint_text": "I have a follow-up appointment", "call_id": "vg_followup2"},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert body["status"] == "needs_clarification"
+    assert called["n"] == 0
+
+
+def test_match_issue_negated_follow_up_still_triages(client, db, agent_headers, monkeypatch):
+    """"No follow-up, this is a new problem" mentions the word but negates
+    it -- must NOT hit the follow-up bypass; an otherwise-ambiguous pair
+    should still enter the triage loop like any other new complaint."""
+    term_a = _make_term(db, term="Pain-Hip", body_part="Hip", category="pain")
+    term_b = _make_term(db, term="Pain-Back", body_part="Back/Neck", category="pain")
+    db.commit()
+    _mock_llm(
+        monkeypatch,
+        {
+            "ortho_relevant": True,
+            "matches": [
+                {"term_id": term_a.id, "confidence": 0.5, "spoken_label": "hip pain"},
+                {"term_id": term_b.id, "confidence": 0.45, "spoken_label": "back pain"},
+            ],
+        },
+    )
+    monkeypatch.setattr(routing_module, "_generate_triage_question", lambda a, b: "Is it more your hip or your back?")
+
+    resp = client.post(
+        "/api/v1/routing/match-issue",
+        json={
+            "complaint_text": "no follow-up, this is a new pain problem",
+            "call_id": "vg_followup3",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "needs_triage"
+
+
 def test_full_triage_loop_resolves_on_third_round_knee_vs_shoulder(
     client, db, agent_headers, monkeypatch
 ):

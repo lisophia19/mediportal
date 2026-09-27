@@ -35,6 +35,11 @@ routing_bp = Blueprint("routing", __name__, url_prefix="/api/v1/routing")
 # disambiguating question (never a no_match decline -- see match_issue).
 MATCH_CONFIDENCE = 0.75
 MATCH_GAP = 0.15  # top candidate must clear runner-up by this much
+# Follow-up callers skip the gap check (see match_issue), but still need the
+# top guess to be a plausible match, not garbage -- this floor is
+# deliberately lower than MATCH_CONFIDENCE since ambiguous-but-real
+# complaints (the whole reason they didn't clear the gap) often score here.
+FOLLOW_UP_MIN_CONFIDENCE = 0.3
 MAX_CANDIDATE_TERMS = 12
 
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
@@ -158,13 +163,25 @@ _STOPWORDS = {
 # Words that describe the act of scheduling, never a reason for the visit --
 # stripped alongside _STOPWORDS to detect zero-signal complaints up front
 # (sending those to the LLM produced no_match/needs_clarification/parse
-# errors for real calls) and just ask, instead of guessing.
+# errors for real calls) and just ask, instead of guessing. "follow-up"
+# describes the VISIT TYPE (returning patient continuing care), not a
+# clinical reason, so it's excluded the same way -- otherwise it survives
+# as a lone "signal word" and gets fed to the LLM as if it were a symptom.
 _SCHEDULING_ONLY_WORDS = {
     "schedule", "scheduling", "appointment", "appointments", "want",
     "wanted", "would", "need", "needed", "see", "visit", "doctor",
     "doctors", "book", "booking", "come", "make", "today", "someone",
     "somebody", "office", "practice", "call", "calling",
+    "follow-up", "followup", "follow",
 }
+
+_FOLLOW_UP_RE = re.compile(r"\bfollow[\s-]?up\b", re.I)
+# Guards against "no follow-up needed, this is a new problem" -- a negation
+# within a few words of "follow-up" means the caller is describing a NEW
+# complaint, not continuing care, so the triage-bypass below must not fire.
+_FOLLOW_UP_NEGATION_RE = re.compile(
+    r"\b(no|not|don'?t|isn'?t|without)\b[\w\s]{0,15}\bfollow[\s-]?up\b", re.I
+)
 
 NEEDS_REASON_PROMPT = "Sure! Could you tell me a bit about what's bringing you in today?"
 
@@ -370,7 +387,22 @@ def match_issue():
         return jsonify({"status": "no_match", "spoken_response": NO_MATCH_RESPONSE})
 
     gap_clears = len(matches) == 1 or (top.get("confidence", 0) - matches[1].get("confidence", 0)) >= MATCH_GAP
-    if top.get("confidence", 0) >= MATCH_CONFIDENCE and gap_clears:
+    confidence_clears = top.get("confidence", 0) >= MATCH_CONFIDENCE
+    if confidence_clears and gap_clears:
+        return _matched_response(top, top_term, matches, terms_by_id)
+
+    # A follow-up caller is continuing existing care, not describing a new
+    # problem to diagnose -- precisely discriminating between two candidate
+    # terms doesn't matter the way it does for a new complaint, so skip the
+    # gap check (a lower confidence floor still applies, to rule out a
+    # garbage top guess) and take the best guess instead of running the
+    # triage loop -- unless the caller explicitly negates it ("no follow-up,
+    # this is a new problem"), in which case treat it as a real new complaint.
+    if (
+        top.get("confidence", 0) >= FOLLOW_UP_MIN_CONFIDENCE
+        and _FOLLOW_UP_RE.search(complaint_text)
+        and not _FOLLOW_UP_NEGATION_RE.search(complaint_text)
+    ):
         return _matched_response(top, top_term, matches, terms_by_id)
 
     # Ambiguous: enter the fluid triage loop (spec §5.1) instead of a
