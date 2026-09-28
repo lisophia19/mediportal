@@ -1340,6 +1340,12 @@ def test_find_doctor_by_name_office_only_no_doctor_named_pins_eligible_doctor(
     assert body["status"] == "matched"
     assert body["best_doctor_id"] == office_doctor.id
     assert body["best_practice_id"] == port_jeff.id
+    # A clean office-only pin has nothing to explain -- has_substitution_note
+    # must be "false" so the flow skips explain_requested_substitution
+    # entirely instead of routing into a freeform node with nothing to say
+    # (the live stall this field was added to fix).
+    assert body["has_substitution_note"] == "false"
+    assert "spoken_response" not in body
 
 
 def test_find_doctor_by_name_office_only_no_eligible_doctor_there_falls_back_honestly(
@@ -1370,6 +1376,7 @@ def test_find_doctor_by_name_office_only_no_eligible_doctor_there_falls_back_hon
     assert body["status"] == "matched"
     assert body["best_doctor_id"] == only_doctor.id
     assert "Port Jefferson office" in body["spoken_response"]
+    assert body["has_substitution_note"] == "true"
 
 
 def test_find_doctor_by_name_office_and_gender_both_named_but_only_office_satisfiable(
@@ -1403,6 +1410,7 @@ def test_find_doctor_by_name_office_and_gender_both_named_but_only_office_satisf
     assert body["best_doctor_id"] == office_doctor.id
     assert "that gender" in body["spoken_response"]
     assert "Port Jefferson" in body["spoken_response"]
+    assert body["has_substitution_note"] == "true"
 
 
 def test_find_doctor_by_name_named_doctor_ineligible_at_requested_office_still_explains_why(
@@ -1435,6 +1443,7 @@ def test_find_doctor_by_name_named_doctor_ineligible_at_requested_office_still_e
     assert body["best_doctor_id"] == office_doctor.id
     assert "Fracchia" in body["spoken_response"]
     assert "doesn't treat this" in body["spoken_response"]
+    assert body["has_substitution_note"] == "true"
 
 
 def test_find_doctor_by_name_named_eligible_doctor_gender_mismatch_still_books_them(
@@ -1623,6 +1632,10 @@ def test_find_doctor_by_name_needs_choice_prefers_gender_matching_option_b(
     assert body["status"] == "needs_choice"
     assert body["option_b_doctor_id"] == chen.id
     assert "gender you mentioned" not in body["spoken_response"]
+    # has_substitution_note only means something for a "matched" response --
+    # must stay unset here, or the flow's equal() check for it would wrongly
+    # intercept a needs_choice response before it reaches choose_requested_doctor_option.
+    assert "has_substitution_note" not in body
 
 
 def test_find_doctor_by_name_needs_choice_honest_when_gender_unmet_by_both_options(
@@ -1777,3 +1790,27 @@ def test_find_doctor_by_name_requires_agent_key(client, db):
         json={"doctor_office_text": "Dr. Fracchia", "term_id": 1, "date_of_birth": "1970-01-01", "call_id": "vg_x"},
     )
     assert resp.status_code == 401
+
+
+def test_find_doctor_by_name_no_eligible_doctor_has_no_substitution_note(client, db, agent_headers, monkeypatch):
+    """No doctor treats this term at all -- has_substitution_note must stay
+    unset (that field only means something on a 'matched' response), so the
+    flow's equal() check for it correctly falls through to the existing
+    status=="no_eligible_doctor" transition instead of misrouting."""
+    term = _make_term(db)
+    db.commit()
+    _mock_extraction(monkeypatch, doctor_name=None, practice_name=None)
+
+    resp = client.post(
+        "/api/v1/routing/find-doctor-by-name",
+        json={
+            "doctor_office_text": "no preference",
+            "term_id": term.id,
+            "date_of_birth": "1970-01-01",
+            "call_id": "vg_no_eligible1",
+        },
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "no_eligible_doctor"
+    assert "has_substitution_note" not in body

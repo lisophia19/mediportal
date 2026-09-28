@@ -626,26 +626,29 @@ nodes = [
             out("option_b_doctor_id", "INTEGER", nullable=True),
             out("option_b_doctor_name", "STRING", nullable=True),
             out("spoken_response", "STRING", nullable=True),
+            out("has_substitution_note", "STRING", nullable=True),
         ],
         transitions=[
-            equal("find_requested_doctor_fn", "status", "matched", "explain_requested_substitution"),
+            # Routes on has_substitution_note, not status=="matched" -- a
+            # freeform node told to "say nothing and continue" when there's
+            # nothing to say turned out not to reliably auto-advance (found
+            # live: the call just hangs after the idle filler, no further
+            # backend calls ever fire). A real transition field means the
+            # freeform node is only ever entered when it truly has something
+            # to say, and the no-note case skips it entirely -- deterministic
+            # either way, like every other branch in this flow.
+            equal("find_requested_doctor_fn", "has_substitution_note", "true", "explain_requested_substitution"),
+            equal("find_requested_doctor_fn", "has_substitution_note", "false", "check_requested_availability_fn"),
             equal("find_requested_doctor_fn", "status", "needs_choice", "choose_requested_doctor_option"),
             equal("find_requested_doctor_fn", "status", "no_eligible_doctor", "dead_end_no_requested_doctor"),
             always("dead_end_system_error"),
         ],
     ),
-    # functionStartedMessage is literal-text-only (confirmed the hard way --
-    # an earlier conditional version here got spoken as raw instruction
-    # text, not interpreted). A real conditional needs an actual prompt
-    # node instead, which is what this is: speaks the honest substitution
-    # reason when there is one, silently continues when there isn't.
     freeform_node(
         "explain_requested_substitution", "explain-requested-substitution",
         (
-            "If {{node.find_requested_doctor_fn.spoken_response}} is blank or empty, "
-            "say nothing and continue immediately. Otherwise say "
-            "{{node.find_requested_doctor_fn.spoken_response}} verbatim -- it's the "
-            "honest reason a substitute doctor was chosen -- then continue."
+            "Say {{node.find_requested_doctor_fn.spoken_response}} verbatim -- it's "
+            "the honest reason a substitute doctor was chosen -- then continue."
         ),
         transitions=[always("check_requested_availability_fn")],
     ),
@@ -726,9 +729,14 @@ nodes = [
             out("best_doctor_spoken_label", "STRING", nullable=True),
             out("best_doctor_name", "STRING", nullable=True),
             out("spoken_response", "STRING", nullable=True),
+            out("has_substitution_note", "STRING", nullable=True),
         ],
         transitions=[
-            equal("find_requested_doctor_retry_fn", "status", "matched", "explain_requested_retry_substitution"),
+            # See find_requested_doctor_fn's transitions above for why this
+            # routes on has_substitution_note rather than a freeform node
+            # deciding whether to stay silent.
+            equal("find_requested_doctor_retry_fn", "has_substitution_note", "true", "explain_requested_retry_substitution"),
+            equal("find_requested_doctor_retry_fn", "has_substitution_note", "false", "check_requested_availability_retry_fn"),
             # A second needs_choice or no_eligible_doctor is bad enough luck
             # that an honest dead end beats a 3rd doctor-resolution attempt.
             always("dead_end_no_requested_doctor"),
@@ -736,12 +744,7 @@ nodes = [
     ),
     freeform_node(
         "explain_requested_retry_substitution", "explain-requested-retry-substitution",
-        (
-            "If {{node.find_requested_doctor_retry_fn.spoken_response}} is blank or "
-            "empty, say nothing and continue immediately. Otherwise say "
-            "{{node.find_requested_doctor_retry_fn.spoken_response}} verbatim, then "
-            "continue."
-        ),
+        "Say {{node.find_requested_doctor_retry_fn.spoken_response}} verbatim, then continue.",
         transitions=[always("check_requested_availability_retry_fn")],
     ),
     function_node(

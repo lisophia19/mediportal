@@ -210,6 +210,21 @@ it freely as more requirements surface. Nothing here is committed to or schedule
 - **Load and concurrency** — the baseline slot-booking lock is correct but untested
   under real contention.
 
+### Known Vogent platform quirk: freeform nodes can't rely on conditional silence
+
+Found live (a real call stalled forever -- no further speech, no further backend
+calls -- after a caller named an office with nothing to explain about the doctor
+pick): a `freeform_node` instructed "if X is blank, say nothing and continue" does
+not reliably auto-advance. Fixed for the one place this pattern existed
+(`find_requested_doctor_fn`/`explain_requested_substitution` and their retry
+twins, in `vogent/vogent_flow.py`) by having the backend return an explicit
+`has_substitution_note` field and routing on it with a real `equal()` transition
+instead of relying on the model to decide whether to stay silent -- the same
+deterministic-transition pattern every other branch in this flow already uses.
+**Rule for any new flow node:** never give a freeform/question node a "say
+something, or say nothing and continue" instruction as its only way to advance --
+always give it (or the node before it) an explicit field to transition on.
+
 ## Compliance
 
 - **HIPAA / PHI handling.** Transcripts contain names, DOBs, and clinical complaints.

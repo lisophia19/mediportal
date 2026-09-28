@@ -1085,12 +1085,15 @@ def _pinned_response(term, doctor, practice, distance, note):
     """Builds a 'matched' response pinned to (doctor, practice, distance),
     with `note` prepended to spoken_response when given -- shared by every
     find_doctor_by_name branch that resolves to one specific doctor while
-    still being honest about a preference that wasn't (fully) honored."""
+    still being honest about a preference that wasn't (fully) honored.
+    has_substitution_note is a real field (not just an empty spoken_response)
+    so the flow can branch on it deterministically -- see the comment on
+    explain_requested_substitution in vogent_flow.py for why that matters."""
     response = _find_doctors_response(term, [(doctor, practice, distance)])
-    if not note:
-        return response
     body = response.get_json()
-    body["spoken_response"] = f"{note}, so I'll book you with {body['best_doctor_spoken_label']} instead."
+    body["has_substitution_note"] = "true" if note else "false"
+    if note:
+        body["spoken_response"] = f"{note}, so I'll book you with {body['best_doctor_spoken_label']} instead."
     return jsonify(body)
 
 
@@ -1104,6 +1107,7 @@ def _ranked_fallback_response(term, eligibilities, caller_coords, note):
         return _no_eligible_doctor_response("not_covered", term, caller_coords)
     response = _find_doctors_response(term, ranked)
     body = response.get_json()
+    body["has_substitution_note"] = "true" if note else "false"
     if note:
         body["spoken_response"] = f"{note}, so I'll book you with {body['best_doctor_spoken_label']} instead."
     return jsonify(body)
