@@ -1344,7 +1344,7 @@ def test_find_doctor_by_name_office_only_no_doctor_named_pins_eligible_doctor(
     # must be "false" so the flow skips explain_requested_substitution
     # entirely instead of routing into a freeform node with nothing to say
     # (the live stall this field was added to fix).
-    assert body["has_substitution_note"] == "false"
+    assert body["has_substitution_note"] == "NO_NOTE"
     assert "spoken_response" not in body
 
 
@@ -1376,7 +1376,7 @@ def test_find_doctor_by_name_office_only_no_eligible_doctor_there_falls_back_hon
     assert body["status"] == "matched"
     assert body["best_doctor_id"] == only_doctor.id
     assert "Port Jefferson office" in body["spoken_response"]
-    assert body["has_substitution_note"] == "true"
+    assert body["has_substitution_note"] == "NOTE"
 
 
 def test_find_doctor_by_name_office_and_gender_both_named_but_only_office_satisfiable(
@@ -1410,7 +1410,7 @@ def test_find_doctor_by_name_office_and_gender_both_named_but_only_office_satisf
     assert body["best_doctor_id"] == office_doctor.id
     assert "that gender" in body["spoken_response"]
     assert "Port Jefferson" in body["spoken_response"]
-    assert body["has_substitution_note"] == "true"
+    assert body["has_substitution_note"] == "NOTE"
 
 
 def test_find_doctor_by_name_named_doctor_ineligible_at_requested_office_still_explains_why(
@@ -1443,7 +1443,7 @@ def test_find_doctor_by_name_named_doctor_ineligible_at_requested_office_still_e
     assert body["best_doctor_id"] == office_doctor.id
     assert "Fracchia" in body["spoken_response"]
     assert "doesn't treat this" in body["spoken_response"]
-    assert body["has_substitution_note"] == "true"
+    assert body["has_substitution_note"] == "NOTE"
 
 
 def test_find_doctor_by_name_named_eligible_doctor_gender_mismatch_still_books_them(

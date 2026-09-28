@@ -637,8 +637,12 @@ nodes = [
             # freeform node is only ever entered when it truly has something
             # to say, and the no-note case skips it entirely -- deterministic
             # either way, like every other branch in this flow.
-            equal("find_requested_doctor_fn", "has_substitution_note", "true", "explain_requested_substitution"),
-            equal("find_requested_doctor_fn", "has_substitution_note", "false", "check_requested_availability_fn"),
+            # "NOTE"/"NO_NOTE" not "true"/"false" -- confirmed live that
+            # equal() doesn't reliably match those literal words (this
+            # exact bug came back with "true"/"false" the first time this
+            # fix was deployed); same sentinel-string idiom as "NONE" below.
+            equal("find_requested_doctor_fn", "has_substitution_note", "NOTE", "explain_requested_substitution"),
+            equal("find_requested_doctor_fn", "has_substitution_note", "NO_NOTE", "check_requested_availability_fn"),
             equal("find_requested_doctor_fn", "status", "needs_choice", "choose_requested_doctor_option"),
             equal("find_requested_doctor_fn", "status", "no_eligible_doctor", "dead_end_no_requested_doctor"),
             always("dead_end_system_error"),
@@ -733,10 +737,11 @@ nodes = [
         ],
         transitions=[
             # See find_requested_doctor_fn's transitions above for why this
-            # routes on has_substitution_note rather than a freeform node
-            # deciding whether to stay silent.
-            equal("find_requested_doctor_retry_fn", "has_substitution_note", "true", "explain_requested_retry_substitution"),
-            equal("find_requested_doctor_retry_fn", "has_substitution_note", "false", "check_requested_availability_retry_fn"),
+            # routes on has_substitution_note (as "NOTE"/"NO_NOTE", not
+            # "true"/"false") rather than a freeform node deciding whether
+            # to stay silent.
+            equal("find_requested_doctor_retry_fn", "has_substitution_note", "NOTE", "explain_requested_retry_substitution"),
+            equal("find_requested_doctor_retry_fn", "has_substitution_note", "NO_NOTE", "check_requested_availability_retry_fn"),
             # A second needs_choice or no_eligible_doctor is bad enough luck
             # that an honest dead end beats a 3rd doctor-resolution attempt.
             always("dead_end_no_requested_doctor"),

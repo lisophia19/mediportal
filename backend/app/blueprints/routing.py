@@ -1088,10 +1088,13 @@ def _pinned_response(term, doctor, practice, distance, note):
     still being honest about a preference that wasn't (fully) honored.
     has_substitution_note is a real field (not just an empty spoken_response)
     so the flow can branch on it deterministically -- see the comment on
-    explain_requested_substitution in vogent_flow.py for why that matters."""
+    explain_requested_substitution in vogent_flow.py for why that matters.
+    "NOTE"/"NO_NOTE" rather than "true"/"false" -- confirmed live that
+    Vogent's equal() transition doesn't reliably match those literal words,
+    same sentinel-string idiom as "NONE"/"CONCERN" elsewhere in this file."""
     response = _find_doctors_response(term, [(doctor, practice, distance)])
     body = response.get_json()
-    body["has_substitution_note"] = "true" if note else "false"
+    body["has_substitution_note"] = "NOTE" if note else "NO_NOTE"
     if note:
         body["spoken_response"] = f"{note}, so I'll book you with {body['best_doctor_spoken_label']} instead."
     return jsonify(body)
@@ -1107,7 +1110,7 @@ def _ranked_fallback_response(term, eligibilities, caller_coords, note):
         return _no_eligible_doctor_response("not_covered", term, caller_coords)
     response = _find_doctors_response(term, ranked)
     body = response.get_json()
-    body["has_substitution_note"] = "true" if note else "false"
+    body["has_substitution_note"] = "NOTE" if note else "NO_NOTE"
     if note:
         body["spoken_response"] = f"{note}, so I'll book you with {body['best_doctor_spoken_label']} instead."
     return jsonify(body)
