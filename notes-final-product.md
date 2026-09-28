@@ -210,20 +210,33 @@ it freely as more requirements surface. Nothing here is committed to or schedule
 - **Load and concurrency** — the baseline slot-booking lock is correct but untested
   under real contention.
 
-### Known Vogent platform quirk: freeform nodes can't rely on conditional silence
+### Known Vogent platform quirks (both found live, not from docs)
 
-Found live (a real call stalled forever -- no further speech, no further backend
-calls -- after a caller named an office with nothing to explain about the doctor
-pick): a `freeform_node` instructed "if X is blank, say nothing and continue" does
-not reliably auto-advance. Fixed for the one place this pattern existed
-(`find_requested_doctor_fn`/`explain_requested_substitution` and their retry
-twins, in `vogent/vogent_flow.py`) by having the backend return an explicit
-`has_substitution_note` field and routing on it with a real `equal()` transition
-instead of relying on the model to decide whether to stay silent -- the same
-deterministic-transition pattern every other branch in this flow already uses.
-**Rule for any new flow node:** never give a freeform/question node a "say
-something, or say nothing and continue" instruction as its only way to advance --
-always give it (or the node before it) an explicit field to transition on.
+**1. Freeform nodes can't rely on conditional silence.** A real call stalled
+forever (no further speech, no further backend calls) after a caller named an
+office with nothing to explain about the doctor pick: a `freeform_node`
+instructed "if X is blank, say nothing and continue" does not reliably
+auto-advance. **Rule:** never give a freeform/question node a "say something,
+or say nothing and continue" instruction as its only way to advance -- always
+give it (or the node before it) an explicit field to transition on.
+
+**2. `equal()` transitions don't reliably match a nullable output field --
+only a non-nullable one.** The first fix for #1 added a new `nullable=True`
+output field (`has_substitution_note`) and an `equal()` check against it.
+That shipped, then failed on the very next live call: the backend returned
+the expected value both times (confirmed by calling the endpoint directly),
+but the flow still fell through to the `always()` catch-all -- twice, with
+two different pairs of string values ("true"/"false", then "NOTE"/"NO_NOTE"),
+ruling out the literal words as the cause. Every other `equal()` in this
+entire 138-node flow checks either `status` or a question node's `answer` --
+both always declared non-nullable -- and this was the first `equal()` ever
+written against a `nullable=True` field. **Rule:** never write an `equal()`
+transition against a `nullable=True` output field. If a function's "matched"
+outcome needs a sub-branch, encode it as a distinct `status` value (e.g.
+`matched_with_note` vs `matched`, see `find_doctor_by_name` in
+`backend/app/blueprints/routing.py`) instead of a separate nullable flag --
+`status` (or an `answer`) is the only field type proven to drive `equal()`
+reliably on this platform.
 
 ## Compliance
 

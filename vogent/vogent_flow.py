@@ -626,23 +626,23 @@ nodes = [
             out("option_b_doctor_id", "INTEGER", nullable=True),
             out("option_b_doctor_name", "STRING", nullable=True),
             out("spoken_response", "STRING", nullable=True),
-            out("has_substitution_note", "STRING", nullable=True),
         ],
         transitions=[
-            # Routes on has_substitution_note, not status=="matched" -- a
-            # freeform node told to "say nothing and continue" when there's
-            # nothing to say turned out not to reliably auto-advance (found
-            # live: the call just hangs after the idle filler, no further
-            # backend calls ever fire). A real transition field means the
-            # freeform node is only ever entered when it truly has something
-            # to say, and the no-note case skips it entirely -- deterministic
-            # either way, like every other branch in this flow.
-            # "NOTE"/"NO_NOTE" not "true"/"false" -- confirmed live that
-            # equal() doesn't reliably match those literal words (this
-            # exact bug came back with "true"/"false" the first time this
-            # fix was deployed); same sentinel-string idiom as "NONE" below.
-            equal("find_requested_doctor_fn", "has_substitution_note", "NOTE", "explain_requested_substitution"),
-            equal("find_requested_doctor_fn", "has_substitution_note", "NO_NOTE", "check_requested_availability_fn"),
+            # status=="matched_with_note" vs "matched" (not a separate
+            # boolean field) drives whether this routes through
+            # explain_requested_substitution -- a freeform node told to
+            # "say nothing and continue" when there's nothing to say
+            # doesn't reliably auto-advance (found live: the call just
+            # hangs, no further backend calls ever fire). Tried fixing this
+            # with a separate nullable has_substitution_note field first
+            # (both "true"/"false" and "NOTE"/"NO_NOTE") -- confirmed live,
+            # twice, that Vogent's equal() doesn't reliably match against a
+            # NULLABLE output field regardless of its value. status is
+            # non-nullable and is the one field every node in this flow
+            # already branches on successfully, so reusing it (with a new
+            # value) instead of a new field is the proven-safe fix.
+            equal("find_requested_doctor_fn", "status", "matched_with_note", "explain_requested_substitution"),
+            equal("find_requested_doctor_fn", "status", "matched", "check_requested_availability_fn"),
             equal("find_requested_doctor_fn", "status", "needs_choice", "choose_requested_doctor_option"),
             equal("find_requested_doctor_fn", "status", "no_eligible_doctor", "dead_end_no_requested_doctor"),
             always("dead_end_system_error"),
@@ -733,15 +733,14 @@ nodes = [
             out("best_doctor_spoken_label", "STRING", nullable=True),
             out("best_doctor_name", "STRING", nullable=True),
             out("spoken_response", "STRING", nullable=True),
-            out("has_substitution_note", "STRING", nullable=True),
         ],
         transitions=[
             # See find_requested_doctor_fn's transitions above for why this
-            # routes on has_substitution_note (as "NOTE"/"NO_NOTE", not
-            # "true"/"false") rather than a freeform node deciding whether
+            # routes on status=="matched_with_note"/"matched" rather than a
+            # separate nullable field or a freeform node deciding whether
             # to stay silent.
-            equal("find_requested_doctor_retry_fn", "has_substitution_note", "NOTE", "explain_requested_retry_substitution"),
-            equal("find_requested_doctor_retry_fn", "has_substitution_note", "NO_NOTE", "check_requested_availability_retry_fn"),
+            equal("find_requested_doctor_retry_fn", "status", "matched_with_note", "explain_requested_retry_substitution"),
+            equal("find_requested_doctor_retry_fn", "status", "matched", "check_requested_availability_retry_fn"),
             # A second needs_choice or no_eligible_doctor is bad enough luck
             # that an honest dead end beats a 3rd doctor-resolution attempt.
             always("dead_end_no_requested_doctor"),

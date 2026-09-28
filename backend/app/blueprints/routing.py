@@ -1082,35 +1082,40 @@ def _combine_notes(*notes):
 
 
 def _pinned_response(term, doctor, practice, distance, note):
-    """Builds a 'matched' response pinned to (doctor, practice, distance),
-    with `note` prepended to spoken_response when given -- shared by every
-    find_doctor_by_name branch that resolves to one specific doctor while
-    still being honest about a preference that wasn't (fully) honored.
-    has_substitution_note is a real field (not just an empty spoken_response)
-    so the flow can branch on it deterministically -- see the comment on
-    explain_requested_substitution in vogent_flow.py for why that matters.
-    "NOTE"/"NO_NOTE" rather than "true"/"false" -- confirmed live that
-    Vogent's equal() transition doesn't reliably match those literal words,
-    same sentinel-string idiom as "NONE"/"CONCERN" elsewhere in this file."""
+    """Builds a 'matched' (or 'matched_with_note') response pinned to
+    (doctor, practice, distance), with `note` prepended to spoken_response
+    when given -- shared by every find_doctor_by_name branch that resolves
+    to one specific doctor while still being honest about a preference
+    that wasn't (fully) honored.
+
+    status carries the note-or-not distinction, not a separate boolean
+    field -- confirmed live that Vogent's equal() transition doesn't
+    reliably match against a nullable output field (has_substitution_note,
+    tried first) regardless of its string value. status is the one field
+    every function node in this flow already branches on successfully, so
+    reusing it here (matched_with_note vs matched) is the proven-safe way
+    to make the flow route deterministically around
+    explain_requested_substitution -- see the comment there."""
     response = _find_doctors_response(term, [(doctor, practice, distance)])
     body = response.get_json()
-    body["has_substitution_note"] = "NOTE" if note else "NO_NOTE"
     if note:
+        body["status"] = "matched_with_note"
         body["spoken_response"] = f"{note}, so I'll book you with {body['best_doctor_spoken_label']} instead."
     return jsonify(body)
 
 
 def _ranked_fallback_response(term, eligibilities, caller_coords, note):
-    """Ranks `eligibilities` by distance and returns a 'matched' response,
-    with `note` prepended to spoken_response when given -- the shared tail
-    for every honest fallback in find_doctor_by_name (name not found,
-    doctor ineligible, requested office/gender unavailable)."""
+    """Ranks `eligibilities` by distance and returns a 'matched' (or
+    'matched_with_note') response, with `note` prepended to spoken_response
+    when given -- the shared tail for every honest fallback in
+    find_doctor_by_name (name not found, doctor ineligible, requested
+    office/gender unavailable)."""
     ranked = _rank_eligible_doctors(eligibilities, caller_coords)
     if not ranked:
         return _no_eligible_doctor_response("not_covered", term, caller_coords)
     response = _find_doctors_response(term, ranked)
     body = response.get_json()
-    body["has_substitution_note"] = "NOTE" if note else "NO_NOTE"
     if note:
+        body["status"] = "matched_with_note"
         body["spoken_response"] = f"{note}, so I'll book you with {body['best_doctor_spoken_label']} instead."
     return jsonify(body)
