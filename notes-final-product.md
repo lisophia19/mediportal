@@ -134,6 +134,15 @@ it freely as more requirements surface. Nothing here is committed to or schedule
 - **Interruption / barge-in handling**, hold music, and call-quality edge cases.
 - **Spanish and other languages.**
 - **Voicemail / after-hours behavior.**
+- **Triage: no real 3rd discriminating question when both candidates in a round are
+  rejected.** Found live: a caller rejecting the resolved triage term used to restart
+  the ENTIRE call from scratch (`ask_complaint`), discarding all progress -- fixed by
+  offering the other already-identified candidate first (spec: `offer_triage_alternate_1/2/3`
+  in `vogent/vogent_flow.py`). But if the caller ALSO rejects that alternate, the fix
+  still falls back to the same full restart, just one step later -- a genuinely new
+  discriminating question (a real backend call, not reusing the original two
+  candidates) would be the deeper fix. Lower risk than the bug just fixed since later
+  rounds exist to recover, but not risk-free; revisit if it recurs on a real call.
 
 ## Patient identity and records
 

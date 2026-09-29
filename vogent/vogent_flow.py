@@ -1138,13 +1138,53 @@ nodes = [
         answer_guidelines="Classify the caller's reply as YES or NO for the answer field only -- never say the word YES or NO out loud yourself.",
         transitions=[
             equal("confirm_triage_1", "answer", "YES", "save_term_triaged_1"),
-            always("ask_complaint"),
+            # A "no" here must NOT discard the whole triage result and
+            # restart the call from "what can we help you with" -- found
+            # live: this exact NO -> ask_complaint reset led to a caller
+            # with a real wrist injury eventually getting wrongly told the
+            # practice doesn't treat it. resolve_triage_fn already computed
+            # the OTHER candidate as alternate_1 for exactly this case --
+            # offer it before ever falling back to a full restart, same
+            # pattern confirm_complaint's NO already uses via offer_alternates.
+            always("offer_triage_alternate_1"),
         ],
     ),
     function_node(
         "save_term_triaged_1", "save-term-triaged-1", "update_call",
         inputs={
             "matched_term_id": "{{node.resolve_triage_fn.term.id}}",
+            "raw_complaint": "{{node.ask_complaint.answer}}",
+        },
+        outputs=[out("status", "STRING")],
+        transitions=[always("ask_first_name")],
+    ),
+    question_node(
+        "offer_triage_alternate_1", "offer-triage-alternate-1",
+        (
+            "The caller said that wasn't right. Apologize briefly, then ask if it "
+            "could instead be {{node.resolve_triage_fn.alternate_1_label}}."
+        ),
+        answer_guidelines=(
+            "If the caller agrees it's this alternate, respond with exactly YES. "
+            "If they say no, or describe their issue differently, respond with "
+            "exactly NO."
+        ),
+        transitions=[
+            equal("offer_triage_alternate_1", "answer", "YES", "save_term_triaged_alt_1"),
+            # Both round-1 candidates now rejected -- restarting via
+            # ask_complaint is a known, deferred residual risk (a genuinely
+            # new 3rd discriminating question would be better, but that
+            # needs a real backend call this fix doesn't add). Rounds 2/3
+            # still exist to recover if this restart re-lands on the same
+            # ambiguous pair, so this is lower-risk than the bug just
+            # fixed, not risk-free -- see notes-final-product.md.
+            always("ask_complaint"),
+        ],
+    ),
+    function_node(
+        "save_term_triaged_alt_1", "save-term-triaged-alt-1", "update_call",
+        inputs={
+            "matched_term_id": "{{node.resolve_triage_fn.alternate_1_id}}",
             "raw_complaint": "{{node.ask_complaint.answer}}",
         },
         outputs=[out("status", "STRING")],
@@ -1183,13 +1223,42 @@ nodes = [
         answer_guidelines="Classify the caller's reply as YES or NO for the answer field only -- never say the word YES or NO out loud yourself.",
         transitions=[
             equal("confirm_triage_2", "answer", "YES", "save_term_triaged_2"),
-            always("ask_complaint"),
+            # See confirm_triage_1 for why this offers the other candidate
+            # instead of restarting the call.
+            always("offer_triage_alternate_2"),
         ],
     ),
     function_node(
         "save_term_triaged_2", "save-term-triaged-2", "update_call",
         inputs={
             "matched_term_id": "{{node.resolve_triage_retry_fn.term.id}}",
+            "raw_complaint": "{{node.ask_complaint.answer}}",
+        },
+        outputs=[out("status", "STRING")],
+        transitions=[always("ask_first_name")],
+    ),
+    question_node(
+        "offer_triage_alternate_2", "offer-triage-alternate-2",
+        (
+            "The caller said that wasn't right. Apologize briefly, then ask if it "
+            "could instead be {{node.resolve_triage_retry_fn.alternate_1_label}}."
+        ),
+        answer_guidelines=(
+            "If the caller agrees it's this alternate, respond with exactly YES. "
+            "If they say no, or describe their issue differently, respond with "
+            "exactly NO."
+        ),
+        transitions=[
+            equal("offer_triage_alternate_2", "answer", "YES", "save_term_triaged_alt_2"),
+            # See offer_triage_alternate_1's fallback comment -- same
+            # deferred residual risk, round 3 still exists to recover.
+            always("ask_complaint"),
+        ],
+    ),
+    function_node(
+        "save_term_triaged_alt_2", "save-term-triaged-alt-2", "update_call",
+        inputs={
+            "matched_term_id": "{{node.resolve_triage_retry_fn.alternate_1_id}}",
             "raw_complaint": "{{node.ask_complaint.answer}}",
         },
         outputs=[out("status", "STRING")],
@@ -1231,13 +1300,48 @@ nodes = [
         answer_guidelines="Classify the caller's reply as YES or NO for the answer field only -- never say the word YES or NO out loud yourself.",
         transitions=[
             equal("confirm_triage_3", "answer", "YES", "save_term_triaged_3"),
-            always("ask_complaint"),
+            # See confirm_triage_1 for why this offers the other candidate
+            # instead of restarting the call.
+            always("offer_triage_alternate_3"),
         ],
     ),
     function_node(
         "save_term_triaged_3", "save-term-triaged-3", "update_call",
         inputs={
             "matched_term_id": "{{node.resolve_triage_retry_2_fn.term.id}}",
+            "raw_complaint": "{{node.ask_complaint.answer}}",
+        },
+        outputs=[out("status", "STRING")],
+        transitions=[always("ask_first_name")],
+    ),
+    question_node(
+        "offer_triage_alternate_3", "offer-triage-alternate-3",
+        (
+            "The caller said that wasn't right. Apologize briefly, then ask if it "
+            "could instead be {{node.resolve_triage_retry_2_fn.alternate_1_label}}."
+        ),
+        answer_guidelines=(
+            "If the caller agrees it's this alternate, respond with exactly YES. "
+            "If they say no, or describe their issue differently, respond with "
+            "exactly NO."
+        ),
+        transitions=[
+            equal("offer_triage_alternate_3", "answer", "YES", "save_term_triaged_alt_3"),
+            # Round 3 is the final round -- both triage candidates are now
+            # genuinely exhausted, so this must end honestly (matching
+            # resolve_triage_retry_2_fn's own still_unclear handling above),
+            # never restart via ask_complaint. A restart here could re-enter
+            # match_issue_fn with the same complaint, come back needs_triage
+            # with the same term pair, and loop the whole 3-round sequence
+            # again -- the exact restart-discards-progress risk this fix
+            # exists to remove, just one level deeper.
+            always("dead_end_triage_exhausted"),
+        ],
+    ),
+    function_node(
+        "save_term_triaged_alt_3", "save-term-triaged-alt-3", "update_call",
+        inputs={
+            "matched_term_id": "{{node.resolve_triage_retry_2_fn.alternate_1_id}}",
             "raw_complaint": "{{node.ask_complaint.answer}}",
         },
         outputs=[out("status", "STRING")],
