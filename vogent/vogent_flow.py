@@ -267,7 +267,17 @@ GLOBAL_CONTEXT = (
     "every single time. Rotate naturally between things like 'Got it', 'Okay', "
     "'Great', 'Sure', 'Perfect', 'Thanks', or simply moving straight to the next "
     "question with no acknowledgment at all -- the way a real person doesn't say "
-    "the exact same word after every answer in a conversation."
+    "the exact same word after every answer in a conversation.\n\n"
+    "Never answer a question on the caller's behalf. Every question this call "
+    "asks -- especially a yes/no confirmation like 'does that sound right?' or "
+    "'is that correct?' -- must actually be spoken out loud, and you must use "
+    "the caller's own real reply, never silently assume or infer what they "
+    "would have said and move on without asking. If the caller asks you a "
+    "direct question (e.g. 'is there anything later?', 'are you sure that's "
+    "everything?'), give them a real spoken answer to THAT specific question "
+    "before doing anything else -- never treat a hedge or conditional clause "
+    "in their reply (e.g. 'if not, I'll just take it') as permission to skip "
+    "answering what they actually asked and proceed silently."
 )
 
 nodes = [
