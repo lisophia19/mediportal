@@ -134,6 +134,12 @@ it freely as more requirements surface. Nothing here is committed to or schedule
 - **Interruption / barge-in handling**, hold music, and call-quality edge cases.
 - **Spanish and other languages.**
 - **Voicemail / after-hours behavior.**
+- **"Any other times?" with no better match ends the call instead of falling back.**
+  Found live (call `954cd49d-6991-40d1-bcef-e37b48c59f34`): caller asked for other
+  Friday openings, none existed beyond the one already offered, and the agent
+  apologized and hung up instead of re-offering the Friday slot it had already
+  presented. Should fall back to the already-offered options (or ask if any of
+  those still work) rather than ending the call on a dead end.
 - **Triage: no real 3rd discriminating question when both candidates in a round are
   rejected.** Found live: a caller rejecting the resolved triage term used to restart
   the ENTIRE call from scratch (`ask_complaint`), discarding all progress -- fixed by

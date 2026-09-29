@@ -1,0 +1,198 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @page { size: Letter; margin: 0.6in 0.7in; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
+         color: #2b2d33; margin: 0; font-size: 13px; line-height: 1.5; }
+  .header { display: flex; align-items: center; justify-content: space-between;
+            border-bottom: 3px solid #6C7FE0; padding-bottom: 14px; margin-bottom: 22px; }
+  .header img { height: 42px; }
+  .header .doc-title { text-align: right; }
+  .header .doc-title h1 { font-size: 17px; margin: 0; }
+  .header .doc-title .date { font-size: 11px; color: #8a8d99; margin-top: 2px; }
+  h2.section { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em;
+               color: #6C7FE0; border-bottom: 1px solid #e4e6ef; padding-bottom: 5px;
+               margin: 22px 0 12px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 28px;
+          background: #f6f7fc; border: 1px solid #e4e6ef; border-radius: 8px;
+          padding: 16px 20px; }
+  .grid .label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.03em;
+                 color: #8a8d99; margin-bottom: 1px; }
+  .grid .value { font-size: 13px; }
+  .badge { display: inline-block; background: #e8ecfb; color: #4a5bc9; font-size: 10.5px;
+           font-weight: 600; padding: 2px 9px; border-radius: 100px; margin-top: 2px; }
+  .moment { background: #fffaf0; border-left: 3px solid #e0a33e; padding: 9px 13px;
+            margin: 9px 0 14px; font-size: 12.5px; border-radius: 0 6px 6px 0; }
+  .moment b { color: #9a6b12; }
+  .fixed { background: #f2faf3; border-left: 3px solid #4caf7d; padding: 9px 13px;
+           margin: 9px 0 14px; font-size: 12.5px; border-radius: 0 6px 6px 0; }
+  .fixed b { color: #2f8a5e; }
+  .audio { background: #f0f2fc; border-left: 3px solid #6C7FE0; padding: 9px 13px;
+           margin: 9px 0 14px; font-size: 12.5px; border-radius: 0 6px 6px 0; }
+  .audio b { color: #4a5bc9; }
+  ul.road { margin: 0; padding-left: 18px; }
+  ul.road li { margin-bottom: 7px; font-size: 12.5px; }
+  ul.road li b { color: #2b2d33; }
+  .note { font-size: 11px; color: #8a8d99; margin-top: 10px; }
+  .footer { margin-top: 26px; padding-top: 12px; border-top: 1px solid #e4e6ef;
+            font-size: 10px; color: #9a9da8; display: flex; justify-content: space-between; }
+</style>
+</head>
+<body>
+
+  <div class="header">
+    <img src="kyron-logo.png" alt="Kyron Medical">
+    <div class="doc-title">
+      <h1>Progress Update &mdash; Long Island Bone &amp; Joint</h1>
+      <div class="date">September 29, 2026 &middot; Since the September 20 demo call</div>
+    </div>
+  </div>
+
+  <h2 class="section">Summary</h2>
+  <div class="grid">
+    <div><div class="label">Period covered</div>
+      <div class="value">September 20 &ndash; September 29, 2026</div></div>
+    <div><div class="label">Doctors covered</div>
+      <div class="value">59 across 14 offices &mdash; up from 10 doctors / 5 offices</div></div>
+    <div><div class="label">Real bugs found &amp; fixed</div>
+      <div class="value">5, all found by testing real live calls, not just reading code</div></div>
+    <div><div class="label">Backend test coverage</div>
+      <div class="value">157 automated tests, all passing</div></div>
+  </div>
+
+  <h2 class="section">Provider data expansion</h2>
+  <div class="grid" style="grid-template-columns: 1fr;">
+    <div class="value">
+      The agent's routing knowledge now covers the full <b>Orlin &amp; Cohen</b> group
+      alongside Long Island Bone &amp; Joint &mdash; <b>59 doctors across 14 offices</b>,
+      up from the original 10-doctor, 5-office baseline. Every one of those doctors'
+      eligibility rules (which conditions they treat, age restrictions, and so on) is
+      real data pulled from the practice's own provider spreadsheet, not invented.
+      No routing logic had to change for this &mdash; the agent already resolves
+      doctor/issue matching entirely from data tables, so adding more providers was a
+      data change, not a rebuild.
+    </div>
+  </div>
+
+  <h2 class="section">Smarter triage &amp; real preferences</h2>
+  <div class="grid" style="grid-template-columns: 1fr;">
+    <div class="value">
+      Two meaningful upgrades to how the agent handles an unclear complaint or a
+      caller's stated preference:
+    </div>
+  </div>
+  <div class="fixed"><b>Triage now generalizes to any ambiguous pair, not just hip/spine.</b>
+    When a caller's complaint could plausibly be either of two conditions
+    (hip vs. knee, neck vs. shoulder, a wrist fracture vs. wrist arthritis, and so on),
+    the agent generates a real, specific discriminating question live for that exact
+    pair &mdash; up to 3 rounds if needed &mdash; the same way a trained intake
+    coordinator would ask, instead of a single hardcoded hip/spine script.</div>
+  <div class="fixed"><b>Location, doctor, and gender preferences are now honored end-to-end.</b>
+    A caller can say "I'd like whichever office is closest to Huntington" or name a
+    specific doctor or a gender preference, and the agent actually applies that when
+    finding and booking the appointment &mdash; not just acknowledging it and then
+    booking the default option anyway.</div>
+
+  <h2 class="section">Bugs fixed this week</h2>
+  <div class="grid" style="grid-template-columns: 1fr;">
+    <div class="value">
+      All five below were caught on real test calls placed against the live number,
+      not by reading code &mdash; and each is now covered by an automated regression
+      test so it can't silently come back.
+    </div>
+  </div>
+
+  <div class="fixed"><b>1. Returning patients are recognized instantly.</b>
+    A caller who opens with &ldquo;I'm calling for a follow-up on my knee&rdquo; used to
+    sometimes get asked a clinical triage question meant only for new complaints. The
+    agent now recognizes a follow-up caller immediately and skips straight to booking.</div>
+
+  <div class="fixed"><b>2. The pending-MRI check now reliably fires.</b>
+    Some visits require a patient to complete imaging first. That check was silently
+    getting skipped for certain returning-patient phrasings. It now asks every time it
+    should, and books an imaging appointment instead of the follow-up visit when the
+    patient hasn't had it done yet.</div>
+
+  <div class="fixed"><b>3. Fixed a real call-stalling bug.</b>
+    A caller who named a specific office but not a specific doctor could cause the call
+    to go silent partway through and never recover. Root-caused to how the underlying
+    voice platform handles one specific kind of conditional response, and fixed by
+    making that step fully deterministic instead of relying on the AI to decide
+    whether to speak.</div>
+
+  <div class="fixed"><b>4. A rejected diagnosis no longer restarts the whole call.</b>
+    If a caller said "no, that's not quite it" to the agent's proposed diagnosis, the
+    call used to discard everything and start over from "what can we help you with
+    today?" &mdash; in one case this led to a caller with a genuine injury eventually
+    being told the practice doesn't treat it. The agent now offers the other
+    already-identified possibility first, the way a real front-desk person would.</div>
+
+  <div class="fixed"><b>5. Confirmation questions can no longer get silently skipped.</b>
+    Found on a real call: a yes/no confirmation question was never actually spoken
+    out loud &mdash; the system answered on the caller's behalf and moved on. Added an
+    explicit safeguard against this, and confirmed with a live test call that the
+    confirmation is now genuinely asked every time.</div>
+
+  <div class="moment"><b>Also shipped:</b> a 10-second "please give us a moment" filler
+    during any unusually long search, so the caller never sits in dead air; and a
+    shortened, more natural doctor/location/gender preference question.</div>
+
+  <h2 class="section">Verified with real test calls</h2>
+  <div class="grid" style="grid-template-columns: 1fr;">
+    <div class="value">
+      We run an automated AI-to-AI test-calling setup that places real phone calls
+      against the live number with a variety of caller personas, then reviews the
+      actual outcome of every call. That's how these bugs were caught and confirmed
+      fixed &mdash; not by guessing at edge cases, but by listening to what real calls
+      actually did.
+    </div>
+  </div>
+  <div class="audio"><b>Two call recordings attached separately.</b> One confirms the
+    MRI-prerequisite flow (a returning patient is correctly asked about a pending MRI
+    and booked into imaging). The other confirms the new generalized triage flow (a
+    hip-vs-groin discriminating question is asked live and the caller's preferred
+    office is honored in the booking).</div>
+
+  <h2 class="section">In Progress</h2>
+  <div class="grid" style="grid-template-columns: 1fr;">
+    <div class="value">
+      <ul class="road">
+        <li><b>Slot-search dead ends.</b> Found on a recent test call: when a caller
+          asks for other times and none exist beyond what's already offered, the call
+          currently ends instead of falling back to re-offering the times already on
+          the table. Next in line to fix.</li>
+        <li><b>Routing to another department when we can't help.</b> Designing how the
+          agent hands a caller off to the right desk line (spine, pain management, etc.)
+          when their issue can't be scheduled here, or when they ask to be transferred
+          directly &mdash; using test numbers first so we can verify routing is correct
+          before pointing at real department lines.</li>
+        <li><b>Insurance-aware prompting.</b> Researching which plans (starting with
+          Oscar and QualCare) require a referral or prior authorization before a visit,
+          so the agent can ask the right follow-up question only when it's actually
+          needed, not as a blanket extra step for every caller.</li>
+        <li><b>Provider coverage review.</b> A few conditions currently map to
+          specialists a patient would not expect &mdash; we would like to walk through
+          those with the practice and correct the source data.</li>
+        <li><b>Call review dashboard.</b> Every call is already captured with its
+          transcript, routing decision and booking outcome. Next is richer review
+          &mdash; filtering, match-quality flagging, and letting staff edit provider
+          coverage directly instead of going through us.</li>
+        <li><b>Live schedule integration.</b> Availability currently runs against a
+          modelled calendar. Connecting the practice's real schedule is a configuration
+          change, not a rebuild.</li>
+      </ul>
+      <div class="note">Not yet in scope: reschedule and cancellation by phone,
+        multi-patient calls, and Spanish-language handling.</div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <div>Kyron Medical &mdash; Long Island Bone &amp; Joint scheduling agent</div>
+    <div>Confidential demo material</div>
+  </div>
+
+</body>
+</html>
