@@ -231,6 +231,30 @@ FUNCTIONS = [
         ),
     ),
     (
+        # Registered live via a one-off script (not this file's bulk
+        # create_functions(), which would duplicate every other already-live
+        # function), then this entry updated to match -- keep them in sync
+        # by hand if this schema changes again.
+        "request_transfer",
+        "Caller asked directly to be routed/transferred elsewhere instead of continuing "
+        "the booking flow (spec §5.9). Maps from whatever complaint is already on the "
+        "call -- never pass a department the caller didn't actually say.",
+        "/routing/request-transfer",
+        _schema(
+            {
+                "call_id": {"type": "string"},
+                "term_id": {
+                    "type": "integer",
+                    "description": "The already-matched term id -- taken directly from "
+                    "match_issue_fn's own output, since it isn't saved to the call row yet "
+                    "at this point in the call",
+                },
+                "zip": {"type": "string", "description": "Optional -- may not be known yet"},
+            },
+            ["call_id", "term_id"],
+        ),
+    ),
+    (
         "get_availability",
         "Get open slots for a doctor (spec §5.5). Pass urgency='URGENT' for urgent terms.",
         "/availability",

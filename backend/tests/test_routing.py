@@ -1808,3 +1808,143 @@ def test_find_doctor_by_name_no_eligible_doctor_status(client, db, agent_headers
     )
     body = resp.get_json()
     assert body["status"] == "no_eligible_doctor"
+
+
+# --- §5.9 request-transfer (caller-initiated escape hatch) ------------------
+
+
+def test_request_transfer_with_matching_rule_returns_redirect(client, db, agent_headers, monkeypatch):
+    """term_id passed directly (the real flow shape -- the matched term
+    isn't saved to the call row yet when a caller asks to be transferred
+    instead of confirming) resolves through the same DirectoryRedirectRule
+    lookup the automatic no_eligible_doctor dead end uses. DIRECTORY_TEST_MODE
+    explicitly unset/off here -- this must speak the REAL desk number, not a
+    mock one, confirming production behavior is unaffected by the overlay."""
+    monkeypatch.delenv("DIRECTORY_TEST_MODE", raising=False)
+    term = _make_term(db, term="Pain-Back", category="pain", body_part="Back/Neck")
+    db.add(DirectoryRedirectRule(body_part="Back/Neck", contact="Spine"))
+    db.add(DirectoryEntry(contact="Spine", location="General", group_name="LIBJ", desk_number="844-887-7463"))
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/routing/request-transfer",
+        json={"call_id": "vg_transfer1", "term_id": term.id},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "redirect"
+    assert body["directory_redirect"] == {"contact": "Spine", "desk_number": "844-887-7463"}
+    assert "transfer you to our Spine line" in body["spoken_response"]
+    assert "844-887-7463" in body["spoken_response"]
+
+
+def test_request_transfer_test_mode_swaps_mapped_contact_for_mock_number(
+    client, db, agent_headers, monkeypatch
+):
+    """With DIRECTORY_TEST_MODE on, a mapped contact (Spine) speaks the
+    throwaway test number instead of the real desk line -- so a human
+    tester can dial it back and confirm correct routing without ever
+    touching a real Northwell number."""
+    monkeypatch.setenv("DIRECTORY_TEST_MODE", "true")
+    term = _make_term(db, term="Pain-Back", category="pain", body_part="Back/Neck")
+    db.add(DirectoryRedirectRule(body_part="Back/Neck", contact="Spine"))
+    db.add(DirectoryEntry(contact="Spine", location="General", group_name="LIBJ", desk_number="844-887-7463"))
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/routing/request-transfer",
+        json={"call_id": "vg_transfer_test1", "term_id": term.id},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["directory_redirect"]["desk_number"] == "+18042221111"
+    assert "844-887-7463" not in body["spoken_response"]
+    assert "+18042221111" in body["spoken_response"]
+
+
+def test_request_transfer_test_mode_unmapped_contact_falls_through_to_real_number(
+    client, db, agent_headers, monkeypatch
+):
+    """Test mode is on, but this contact has no test-number mapping yet --
+    must fall through to the real number rather than silently hiding it or
+    erroring, since the overlay is explicitly a partial/expandable mapping."""
+    monkeypatch.setenv("DIRECTORY_TEST_MODE", "true")
+    term = _make_term(db, term="Lump-Arm", category="Lesion/Mass/Lump/Tumor", body_part="Arm")
+    db.add(DirectoryRedirectRule(category="Lesion/Mass/Lump/Tumor", contact="Orthopedic Oncology"))
+    db.add(
+        DirectoryEntry(
+            contact="Orthopedic Oncology", location="General", group_name="LIBJ", desk_number="833-736-2400"
+        )
+    )
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/routing/request-transfer",
+        json={"call_id": "vg_transfer_test2", "term_id": term.id},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["directory_redirect"]["desk_number"] == "833-736-2400"
+
+
+def test_request_transfer_without_term_id_is_honest_not_a_crash(client, db, agent_headers):
+    """term_id is required -- the one real caller (request_transfer_fn)
+    always has it from match_issue_fn's own output. A request missing it
+    entirely (e.g. call_id alone, with a matched term saved on the call
+    row) must still degrade to an honest callback offer, not resolve a
+    redirect it was never actually asked to find or error out."""
+    term = _make_term(db, term="Pain-Back", category="pain", body_part="Back/Neck")
+    db.add(DirectoryRedirectRule(body_part="Back/Neck", contact="Spine"))
+    db.add(DirectoryEntry(contact="Spine", location="General", group_name="LIBJ", desk_number="844-887-7463"))
+    call = Call(vogent_call_id="vg_transfer2", matched_term_id=term.id)
+    db.add(call)
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/routing/request-transfer",
+        json={"call_id": "vg_transfer2"},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "no_redirect"
+    assert body["directory_redirect"] is None
+
+
+def test_request_transfer_no_term_falls_back_honestly(client, db, agent_headers):
+    """Neither term_id nor a call row with a matched term -- too early in
+    the call to know who to transfer to, so this must be honest about that
+    rather than guessing or erroring."""
+    resp = client.post(
+        "/api/v1/routing/request-transfer",
+        json={"call_id": "vg_transfer_none"},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "no_redirect"
+    assert body["directory_redirect"] is None
+    assert "someone from our office call you back" in body["spoken_response"]
+
+
+def test_request_transfer_term_with_no_rule_falls_back_to_main_office(client, db, agent_headers):
+    term = _make_term(db, term="Unmapped-Thing", category="Nonexistent", body_part="Unspecified")
+    _make_practice(db, "Riverhead", "11901", lat=40.9176, lon=-72.6620, main_phone="631-555-1000")
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/routing/request-transfer",
+        json={"call_id": "vg_transfer3", "term_id": term.id},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "no_redirect"
+    assert body["directory_redirect"] is None
+    assert "transfer you to our main office" in body["spoken_response"]
+    assert "631-555-1000" in body["spoken_response"]
+
+
+def test_request_transfer_requires_agent_key(client, db):
+    resp = client.post(
+        "/api/v1/routing/request-transfer",
+        json={"call_id": "vg_transfer_x"},
+    )
+    assert resp.status_code == 401

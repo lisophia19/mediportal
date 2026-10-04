@@ -1062,11 +1062,39 @@ nodes = [
     question_node(
         "confirm_complaint", "confirm-complaint",
         "{{node.match_issue_fn.confirm_prompt}}",
-        answer_guidelines="Classify the caller's reply as YES or NO for the answer field only -- never say the word YES or NO out loud yourself.",
+        answer_guidelines=(
+            "Classify the caller's reply as YES, NO, or TRANSFER for the answer field "
+            "only -- never say the word YES, NO, or TRANSFER out loud yourself. Respond "
+            "TRANSFER only if the caller explicitly asks to be transferred, routed, or "
+            "connected to a different line/department instead of continuing -- not for "
+            "an ordinary yes/no answer to the question just asked."
+        ),
         transitions=[
             equal("confirm_complaint", "answer", "YES", "save_term_matched"),
+            # Narrow escape hatch (spec §5.9): a caller who asks directly to
+            # be transferred here already has a matched term to map from,
+            # the same way the automatic no_eligible_doctor dead end does --
+            # see request_transfer_fn below.
+            equal("confirm_complaint", "answer", "TRANSFER", "request_transfer_fn"),
             always("offer_alternates"),
         ],
+    ),
+    function_node(
+        "request_transfer_fn", "request-transfer-fn", "request_transfer",
+        inputs={"term_id": "{{node.match_issue_fn.term.id}}"},
+        outputs=[
+            out("status", "STRING"),
+            # Not nullable -- every branch of request_transfer (redirect,
+            # fallback to main line, or honest callback offer) always sets
+            # a real spoken line, unlike some other endpoints' optional
+            # spoken_response fields.
+            out("spoken_response", "STRING"),
+        ],
+        transitions=[always("dead_end_requested_transfer")],
+    ),
+    freeform_node(
+        "dead_end_requested_transfer", "dead-end-requested-transfer",
+        "Say exactly: {{node.request_transfer_fn.spoken_response}} Then say <|hangup|>.",
     ),
     question_node(
         "offer_alternates", "offer-alternates",

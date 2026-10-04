@@ -17,5 +17,6 @@
   "resolve_prerequisite": "7689ba0a-9d56-4d36-ac83-79fe4eab954e",
   "find_imaging_location": "e97051be-5d90-49a6-ab1b-2f6bc87800b0",
   "get_imaging_availability": "ed91138b-205c-452a-9f1f-0adde855a663",
-  "book_imaging": "d3c4d776-bf77-43c5-825c-f24e11764b34"
+  "book_imaging": "d3c4d776-bf77-43c5-825c-f24e11764b34",
+  "request_transfer": "7f739e9d-b5e0-40d9-b010-9062e488d6bb"
 }

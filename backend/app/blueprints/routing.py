@@ -565,6 +565,25 @@ def _fallback_main_phone(caller_coords):
     return (best_practice or practices[0]).main_phone
 
 
+# Test-mode desk number overlay (§5.9) -- swaps a real Northwell desk number
+# for a throwaway test number so a human tester can dial the spoken-back
+# number and independently confirm the agent picked the right contact,
+# without ever touching a real department line. Read-time only -- the real
+# seeded DirectoryEntry data is never modified, and production is unaffected
+# unless DIRECTORY_TEST_MODE is explicitly set. An unmapped contact falls
+# through to its real number even in test mode; add more entries here as
+# more test numbers become available.
+_TEST_MODE_DESK_NUMBERS = {
+    "Spine": "+18042221111",
+}
+
+
+def _test_mode_desk_number(contact):
+    if os.environ.get("DIRECTORY_TEST_MODE", "").lower() not in ("1", "true", "yes"):
+        return None
+    return _TEST_MODE_DESK_NUMBERS.get(contact)
+
+
 def _directory_redirect_for(term):
     """§5.9 -- hand-curated category/body_part -> directory contact lookup.
     A rule matches when every non-null field on it equals the term's
@@ -584,7 +603,8 @@ def _directory_redirect_for(term):
     entry = DirectoryEntry.query.filter(func.lower(DirectoryEntry.contact) == best_rule.contact.lower()).first()
     if entry is None:
         return None
-    return {"contact": entry.contact, "desk_number": entry.desk_number}
+    desk_number = _test_mode_desk_number(entry.contact) or entry.desk_number
+    return {"contact": entry.contact, "desk_number": desk_number}
 
 
 def _eligibility_reason_for_doctor(doctor_id, term, age):
@@ -600,6 +620,30 @@ def _eligibility_reason_for_doctor(doctor_id, term, age):
     return True, None
 
 
+def _redirect_or_fallback_spoken(term, caller_coords, prefix):
+    """Shared by _no_eligible_doctor_response and request_transfer: resolves
+    `term` to a directory redirect, falling back to the nearest practice's
+    main line, falling back to an honest callback offer. `prefix` is
+    whatever leads into the shared "I'm going to transfer you..." phrasing.
+    Returns (redirect_or_None, spoken_text).
+
+    "Transfer" wording is aspirational, not literal -- Vogent has no live
+    call-transfer capability (confirmed against their API docs), so this
+    just speaks the number and the caller has to hang up and redial.
+    Framed as a transfer anyway per product decision, with the gap noted
+    in notes-final-product.md, since a real warm transfer is deferred work."""
+    redirect = _directory_redirect_for(term)
+    if redirect:
+        return redirect, (
+            f"{prefix} I'm going to transfer you to our {redirect['contact']} "
+            f"line -- that's {redirect['desk_number']}."
+        )
+    phone = _fallback_main_phone(caller_coords)
+    if phone:
+        return None, f"{prefix} I'm going to transfer you to our main office -- that's {phone}."
+    return None, f"{prefix} Let me have someone from our office call you back to help find the right place for you."
+
+
 def _no_eligible_doctor_response(reason, term, caller_coords):
     if reason == "age_restricted":
         base = "Our doctors who treat that only see patients in a different age range than you."
@@ -610,25 +654,53 @@ def _no_eligible_doctor_response(reason, term, caller_coords):
     else:
         base = "We don't have a doctor here who treats that."
 
-    # "Transfer" wording is aspirational, not literal -- Vogent has no live
-    # call-transfer capability (confirmed against their API docs), so this
-    # just speaks the number and the caller has to hang up and redial.
-    # Framed as a transfer anyway per product decision, with the gap noted
-    # in notes-final-product.md, since a real warm transfer is deferred work.
-    redirect = _directory_redirect_for(term)
-    if redirect:
-        spoken = f"{base} I'm going to transfer you to our {redirect['contact']} line -- that's {redirect['desk_number']}."
-    else:
-        phone = _fallback_main_phone(caller_coords)
-        if phone:
-            spoken = f"{base} I'm going to transfer you to our main office -- that's {phone}."
-        else:
-            spoken = f"{base} Let me have someone from our office call you back to help find the right place for you."
-
+    redirect, spoken = _redirect_or_fallback_spoken(term, caller_coords, base)
     return jsonify(
         {
             "status": "no_eligible_doctor",
             "reason": reason,
+            "directory_redirect": redirect,
+            "spoken_response": spoken,
+        }
+    )
+
+
+@routing_bp.post("/request-transfer")
+@require_agent_key
+def request_transfer():
+    """§5.9 caller-initiated escape hatch -- the caller asks directly to be
+    routed elsewhere instead of continuing the booking flow, rather than the
+    automatic no_eligible_doctor dead end deciding it for them. Maps through
+    the exact same term -> DirectoryRedirectRule lookup as that automatic
+    case, keyed off whatever complaint the call already captured -- the
+    caller is never asked to name a department themselves. term_id is
+    required (the one caller of this endpoint, request_transfer_fn, always
+    has it from match_issue_fn's own output already in flow context)."""
+    payload = get_agent_json()
+    term_id = coerce_int(payload.get("term_id"))
+    term = db.session.get(Term, term_id) if term_id else None
+
+    if term is None:
+        return jsonify(
+            {
+                "status": "no_redirect",
+                "directory_redirect": None,
+                "spoken_response": (
+                    "I don't have enough yet to know exactly who to transfer you to "
+                    "-- let me have someone from our office call you back instead."
+                ),
+            }
+        )
+
+    # zip is optional -- this endpoint is reachable before the caller has
+    # given one (right after their complaint, well before ask_zip), and
+    # _fallback_main_phone degrades gracefully to the first practice when
+    # caller_coords is None.
+    caller_coords = _zip_coords(payload.get("zip"))
+    redirect, spoken = _redirect_or_fallback_spoken(term, caller_coords, "Of course --")
+    return jsonify(
+        {
+            "status": "redirect" if redirect else "no_redirect",
             "directory_redirect": redirect,
             "spoken_response": spoken,
         }

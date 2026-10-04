@@ -31,6 +31,12 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
       SCHEDULING_PROVIDER: ${SCHEDULING_PROVIDER:-postgres}
+      # §5.9 -- swaps real desk numbers for throwaway test numbers on the
+      # caller-transfer escape hatch. Off by default (safe for production);
+      # set DIRECTORY_TEST_MODE=true in .env only while running live test
+      # calls, then unset it again -- see _TEST_MODE_DESK_NUMBERS in
+      # backend/app/blueprints/routing.py.
+      DIRECTORY_TEST_MODE: ${DIRECTORY_TEST_MODE:-}
     ports:
       - "5000:5000"
     depends_on:
