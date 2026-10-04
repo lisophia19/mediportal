@@ -14,8 +14,15 @@ load_dotenv()
 
 
 class Config:
+    # +psycopg2 explicit, not just "postgresql://" -- SQLAlchemy 2.1 changed
+    # its default driver preference for a bare postgresql:// URL to psycopg
+    # (v3), which this project doesn't install (found live: a routine
+    # rebuild picked up a newer SQLAlchemy via an unpinned base-image bump
+    # and the backend crash-looped in production on ModuleNotFoundError:
+    # psycopg). Being explicit here means a future SQLAlchemy default change
+    # can't silently break this again.
     SQLALCHEMY_DATABASE_URI = os.environ.get(
-        "DATABASE_URL", "postgresql://localhost/mediportal"
+        "DATABASE_URL", "postgresql+psycopg2://localhost/mediportal"
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-me")
