@@ -129,6 +129,27 @@ it freely as more requirements surface. Nothing here is committed to or schedule
   docs), so the caller still has to hang up and redial themselves. Genuine warm
   transfer (keeping the caller on the line) is deferred, as is any redirect/desk-number
   fallback for the urgent-no-slots case noted above under Clinical scope.
+- **Insurance intake -- researched, deliberately deferred beyond carrier + referral.**
+  §5.10 currently asks carrier and (when the mocked rule says so) a referral question,
+  nothing else. Researched what else a real orthopedic front desk typically collects;
+  per product decision, deferring all of it rather than building now:
+  - **Work injury / auto-accident vs. regular insurance.** Highest-value deferred item
+    -- orthopedic practices see high volumes of workers' comp and no-fault auto cases,
+    which route through a completely different billing path (claim number, employer,
+    adjuster/auto-carrier info) than standard insurance. Not asked at all today -- every
+    caller is implicitly treated as a standard-insurance visit.
+  - **Member ID + group number.** Low-friction (caller is usually holding the card),
+    not yet captured.
+  - **Subscriber name/DOB when different from the patient** (e.g. a child on a parent's
+    plan) -- deliberately NOT building phone-call handling for this; per product
+    decision this case gets handled by office staff, not the agent, whenever it comes
+    up.
+  - **Self-pay/no-insurance flag** (to set deposit/cash-rate expectations) and
+    **secondary insurance yes/no** -- both noted, not built.
+  - Explicitly ruled out as inappropriate for a phone call at all (needs a real payer
+    portal/EDI lookup, not caller-reported data): live in-network confirmation,
+    determining/obtaining prior-auth numbers, confirming deductible/copay amounts,
+    verifying WC/no-fault claim status.
 - **Callback queue.** Every baseline dead end (`no_match`, `no_slots`, `failed`) should
   create a real work item for staff, not just a logged call status.
 - **Multi-appointment calls.** Caller booking for a spouse or child, or booking two

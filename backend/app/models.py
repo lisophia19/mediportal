@@ -156,6 +156,44 @@ class DirectoryRedirectRule(db.Model):
     )
 
 
+class InsuranceCarrier(db.Model):
+    """§5.10 insurance-aware prompting (ask-only, never gates booking) --
+    MOCKED data, not real payer policy. A carrier with zero
+    InsuranceReferralRule rows just never gets a referral question asked."""
+
+    __tablename__ = "insurance_carriers"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.Text, nullable=False, unique=True)
+
+
+class InsuranceReferralRule(db.Model):
+    """Carrier (+ plan tier) -> referral-requirement mapping, same spirit
+    as DirectoryRedirectRule. plan_tier NULL applies to every tier of that
+    carrier; a tier-specific row wins when one exists."""
+
+    __tablename__ = "insurance_referral_rules"
+
+    id = db.Column(db.Integer, primary_key=True)
+    carrier_id = db.Column(db.Integer, db.ForeignKey("insurance_carriers.id"), nullable=False)
+    plan_tier = db.Column(db.Text)
+    requires_referral = db.Column(db.Boolean, nullable=False)
+
+    carrier = db.relationship("InsuranceCarrier")
+
+    __table_args__ = (
+        UniqueConstraint("carrier_id", "plan_tier", name="uq_insurance_referral_rule"),
+        # Postgres treats every NULL as distinct, so this stops a 2nd
+        # carrier-wide (plan_tier IS NULL) row the constraint above wouldn't catch.
+        Index(
+            "uq_insurance_referral_rules_carrier_wide",
+            "carrier_id",
+            unique=True,
+            postgresql_where=db.text("plan_tier IS NULL"),
+        ),
+    )
+
+
 class ZipCentroid(db.Model):
     """Straight-line-distance ZIP lookup (§8.3) -- no external geocoding API.
     Covers the 5 real practice ZIPs plus a spread of Long Island caller ZIPs

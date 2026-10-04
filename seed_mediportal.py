@@ -25,6 +25,8 @@ from app.models import (
     DoctorPractice,
     ImagingAppointment,
     ImagingSlot,
+    InsuranceCarrier,
+    InsuranceReferralRule,
     Patient,
     PatientPrerequisite,
     Practice,
@@ -47,6 +49,7 @@ from app.seed.synthetic import (
     apply_patient_phrasing,
     seed_calls,
     seed_directory_redirect_rules,
+    seed_insurance_carriers,
     seed_patient_prerequisites,
     seed_patients,
     seed_users,
@@ -89,6 +92,8 @@ def _wipe_all():
         DoctorPractice,
         TermEligibility,
         DirectoryRedirectRule,
+        InsuranceReferralRule,
+        InsuranceCarrier,
         Term,
         Practice,
         Doctor,
@@ -147,6 +152,7 @@ def seed_mediportal():
 
         apply_patient_phrasing(terms_by_name, warnings)
         seed_directory_redirect_rules()
+        seed_insurance_carriers()
         _seed_zip_centroids()
         patients = seed_patients()
 

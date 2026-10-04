@@ -12,6 +12,8 @@ from ..models import (
     AppointmentSlot,
     Call,
     DirectoryRedirectRule,
+    InsuranceCarrier,
+    InsuranceReferralRule,
     Patient,
     PatientPrerequisite,
     TermEligibility,
@@ -81,6 +83,34 @@ def seed_directory_redirect_rules():
         DirectoryRedirectRule(category="Procedure", contact="Pain Management"),
         DirectoryRedirectRule(category="Lesion/Mass/Lump/Tumor", contact="Orthopedic Oncology"),
         DirectoryRedirectRule(category="Injury", body_part="General", contact="Concussion"),
+    ]
+    db.session.add_all(rules)
+    db.session.flush()
+
+
+def seed_insurance_carriers():
+    """§5.10 insurance-aware prompting -- MOCKED data, not the practice's
+    real payer policy (see docs/design/brainstorm-directory-routing-and-insurance.md).
+    Medicare Advantage is modeled under carrier "Medicare" regardless of
+    which commercial brand sells it (see _extract_carrier_and_tier)."""
+    oscar = InsuranceCarrier(name="Oscar")
+    qualcare = InsuranceCarrier(name="QualCare")
+    medicare = InsuranceCarrier(name="Medicare")
+    medicaid = InsuranceCarrier(name="Medicaid")
+    aetna = InsuranceCarrier(name="Aetna")  # zero rules -- never asks
+    db.session.add_all([oscar, qualcare, medicare, medicaid, aetna])
+    db.session.flush()
+
+    rules = [
+        InsuranceReferralRule(carrier_id=oscar.id, plan_tier="HMO", requires_referral=True),
+        InsuranceReferralRule(carrier_id=oscar.id, plan_tier="PPO", requires_referral=False),
+        InsuranceReferralRule(carrier_id=qualcare.id, plan_tier="HMO", requires_referral=True),
+        InsuranceReferralRule(carrier_id=qualcare.id, plan_tier="PPO", requires_referral=False),
+        InsuranceReferralRule(carrier_id=medicare.id, plan_tier="Traditional", requires_referral=False),
+        InsuranceReferralRule(carrier_id=medicare.id, plan_tier="Advantage HMO", requires_referral=True),
+        InsuranceReferralRule(carrier_id=medicare.id, plan_tier="Advantage PPO", requires_referral=False),
+        InsuranceReferralRule(carrier_id=medicaid.id, plan_tier=None, requires_referral=True),
+        # No rows for Aetna at all.
     ]
     db.session.add_all(rules)
     db.session.flush()

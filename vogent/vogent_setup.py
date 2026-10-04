@@ -255,6 +255,23 @@ FUNCTIONS = [
         ),
     ),
     (
+        # Registered live via a one-off script (see request_transfer above
+        # for why), then this entry updated to match.
+        "check_insurance",
+        "Checks whether the caller's stated insurance carrier requires a referral "
+        "question before booking (spec §5.10, mocked data). Ask-only -- never blocks "
+        "or gates booking on the answer.",
+        "/routing/check-insurance",
+        _schema(
+            {
+                "carrier_name": {"type": "string", "description": "Caller's stated insurance carrier, verbatim"},
+                "plan_tier": {"type": "string", "description": "Optional -- HMO/PPO/etc if the caller stated one"},
+                "call_id": {"type": "string"},
+            },
+            ["carrier_name"],
+        ),
+    ),
+    (
         "get_availability",
         "Get open slots for a doctor (spec §5.5). Pass urgency='URGENT' for urgent terms.",
         "/availability",

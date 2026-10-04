@@ -23,6 +23,8 @@ from ..models import (
     DirectoryRedirectRule,
     Doctor,
     DoctorPractice,
+    InsuranceCarrier,
+    InsuranceReferralRule,
     Practice,
     Term,
     TermEligibility,
@@ -621,17 +623,11 @@ def _eligibility_reason_for_doctor(doctor_id, term, age):
 
 
 def _redirect_or_fallback_spoken(term, caller_coords, prefix):
-    """Shared by _no_eligible_doctor_response and request_transfer: resolves
-    `term` to a directory redirect, falling back to the nearest practice's
-    main line, falling back to an honest callback offer. `prefix` is
-    whatever leads into the shared "I'm going to transfer you..." phrasing.
-    Returns (redirect_or_None, spoken_text).
-
-    "Transfer" wording is aspirational, not literal -- Vogent has no live
-    call-transfer capability (confirmed against their API docs), so this
-    just speaks the number and the caller has to hang up and redial.
-    Framed as a transfer anyway per product decision, with the gap noted
-    in notes-final-product.md, since a real warm transfer is deferred work."""
+    """Resolves `term` to a directory redirect, falling back to the nearest
+    practice's main line, falling back to an honest callback offer.
+    `prefix` leads into the shared "I'm going to transfer you..." phrasing
+    -- wording only, since Vogent can't actually transfer a live call (see
+    notes-final-product.md). Returns (redirect_or_None, spoken_text)."""
     redirect = _directory_redirect_for(term)
     if redirect:
         return redirect, (
@@ -668,14 +664,10 @@ def _no_eligible_doctor_response(reason, term, caller_coords):
 @routing_bp.post("/request-transfer")
 @require_agent_key
 def request_transfer():
-    """§5.9 caller-initiated escape hatch -- the caller asks directly to be
-    routed elsewhere instead of continuing the booking flow, rather than the
-    automatic no_eligible_doctor dead end deciding it for them. Maps through
-    the exact same term -> DirectoryRedirectRule lookup as that automatic
-    case, keyed off whatever complaint the call already captured -- the
-    caller is never asked to name a department themselves. term_id is
-    required (the one caller of this endpoint, request_transfer_fn, always
-    has it from match_issue_fn's own output already in flow context)."""
+    """§5.9 caller-initiated escape hatch -- maps through the same
+    DirectoryRedirectRule lookup as the automatic dead end, keyed off the
+    complaint already on the call. term_id is required; the one caller
+    (request_transfer_fn) always has it from match_issue_fn's output."""
     payload = get_agent_json()
     term_id = coerce_int(payload.get("term_id"))
     term = db.session.get(Term, term_id) if term_id else None
@@ -705,6 +697,79 @@ def request_transfer():
             "spoken_response": spoken,
         }
     )
+
+
+REFERRAL_QUESTION = "Do you have a referral from your primary care doctor on file for this visit?"
+
+_INSURANCE_EXTRACT_PROMPT = """A caller to an orthopedic practice's phone-booking \
+agent was asked what insurance they have. Extract the carrier/plan name, and a plan \
+tier if one was stated or clearly implied.
+
+Valid plan_tier values: "HMO", "PPO", "Traditional" (original/traditional Medicare, \
+not an Advantage plan), "Advantage HMO", "Advantage PPO". If the caller says "Medicare \
+Advantage" without saying HMO or PPO, use "Advantage HMO" -- it's the far more common \
+case. If a caller names a commercial carrier brand ALONGSIDE "Medicare" or "Medicare \
+Advantage" (e.g. "Humana Medicare Advantage", "UnitedHealthcare Medicare"), extract \
+carrier_name as "Medicare", not the commercial brand -- a Medicare Advantage plan is \
+fundamentally a Medicare plan for referral-rule purposes, regardless of which company \
+sells it. Never guess a tier that wasn't said or clearly implied -- leave it null \
+rather than assume.
+
+Caller's answer: "{answer}"
+
+Respond with ONLY JSON, no prose, in exactly this shape:
+{{"carrier_name": "<name>", "plan_tier": "<tier or null>"}}"""
+
+
+def _extract_carrier_and_tier(answer_text):
+    """Returns (carrier_name, plan_tier); degrades to (answer_text, None)
+    on failure, same fail-open pattern as _extract_doctor_practice_gender."""
+    try:
+        prompt = _INSURANCE_EXTRACT_PROMPT.format(answer=answer_text)
+        parsed = json.loads(_strip_markdown_fence(_claude_text(prompt, max_tokens=200)))
+    except Exception:
+        current_app.logger.exception("insurance carrier/tier extraction failed")
+        return answer_text, None
+    return parsed.get("carrier_name") or answer_text, parsed.get("plan_tier") or None
+
+
+@routing_bp.post("/check-insurance")
+@require_agent_key
+def check_insurance():
+    """§5.10 insurance-aware prompting -- ASK ONLY, never gates booking.
+    Extracts carrier + plan tier from one free-text answer (no separate
+    tier question), fuzzy-matches the carrier, and returns whether a
+    referral question is needed. Unrecognized carrier or no matching rule
+    degrades to "don't ask," never a guess.
+
+    status is "unrecognized" / "matched_no_referral" / "matched_needs_referral"
+    -- not a separate boolean, since Vogent's equal() doesn't reliably
+    match a nullable field (see notes-final-product.md)."""
+    payload = get_agent_json()
+    raw_answer = (payload.get("carrier_name") or "").strip()
+    explicit_plan_tier = (payload.get("plan_tier") or "").strip() or None
+
+    carrier_name, extracted_tier = _extract_carrier_and_tier(raw_answer) if raw_answer else (None, None)
+    plan_tier = explicit_plan_tier or extracted_tier
+
+    carrier = (
+        _best_fuzzy_match(carrier_name, InsuranceCarrier.query.all(), lambda c: c.name, DOCTOR_MATCH_SCORE_FLOOR)
+        if carrier_name
+        else None
+    )
+    if carrier is None:
+        return jsonify({"status": "unrecognized", "carrier": None, "referral_question": None})
+
+    # Tier-specific rule wins; falls back to the carrier-wide (plan_tier=None) rule.
+    rule = None
+    if plan_tier:
+        rule = InsuranceReferralRule.query.filter_by(carrier_id=carrier.id, plan_tier=plan_tier).first()
+    if rule is None:
+        rule = InsuranceReferralRule.query.filter_by(carrier_id=carrier.id, plan_tier=None).first()
+
+    if rule and rule.requires_referral:
+        return jsonify({"status": "matched_needs_referral", "carrier": carrier.name, "referral_question": REFERRAL_QUESTION})
+    return jsonify({"status": "matched_no_referral", "carrier": carrier.name, "referral_question": None})
 
 
 @routing_bp.post("/find-doctors")

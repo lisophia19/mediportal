@@ -573,7 +573,7 @@ nodes = [
             "with exactly NAME. For any other correction respond with exactly NO."
         ),
         transitions=[
-            equal("confirm_details", "answer", "YES", "ask_doctor_preference"),
+            equal("confirm_details", "answer", "YES", "ask_insurance_carrier"),
             equal("confirm_details", "answer", "NAME", "correct_name"),
             always("correct_name"),
         ],
@@ -598,6 +598,42 @@ nodes = [
         "save_corrected_name", "save-corrected-name", "update_patient_name",
         inputs={"full_name": "{{node.correct_name.answer}}"},
         outputs=[out("status", "STRING")],
+        transitions=[always("ask_insurance_carrier")],
+    ),
+    # §5.10 insurance-aware prompting (mocked, ask-only). Only asks the
+    # referral follow-up when check_insurance_fn says it's needed.
+    question_node(
+        "ask_insurance_carrier", "ask-insurance-carrier",
+        "What insurance carrier do you have?",
+        answer_guidelines=(
+            "Capture the insurance carrier/plan name the caller states, as close to "
+            "verbatim as possible -- do not guess a specific plan tier (HMO/PPO) "
+            "unless they actually said one."
+        ),
+        transitions=[always("check_insurance_fn")],
+    ),
+    function_node(
+        "check_insurance_fn", "check-insurance-fn", "check_insurance",
+        inputs={"carrier_name": "{{node.ask_insurance_carrier.answer}}"},
+        outputs=[
+            out("status", "STRING"),
+            out("carrier", "STRING", nullable=True),
+            out("referral_question", "STRING", nullable=True),
+        ],
+        transitions=[
+            equal("check_insurance_fn", "status", "matched_needs_referral", "ask_referral"),
+            # "matched_no_referral" and "unrecognized" both skip straight
+            # on -- neither needs a follow-up question.
+            always("ask_doctor_preference"),
+        ],
+    ),
+    question_node(
+        "ask_referral", "ask-referral",
+        "{{node.check_insurance_fn.referral_question}}",
+        answer_guidelines=(
+            "Capture the caller's answer about whether they have a referral on file, "
+            "as close to verbatim as possible."
+        ),
         transitions=[always("ask_doctor_preference")],
     ),
     # spec §5.1a: give the caller a chance to name a specific doctor and/or

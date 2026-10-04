@@ -15,6 +15,8 @@ from app.models import (
     DoctorPractice,
     DirectoryEntry,
     DirectoryRedirectRule,
+    InsuranceCarrier,
+    InsuranceReferralRule,
     Practice,
     Term,
     TermEligibility,
@@ -1946,5 +1948,281 @@ def test_request_transfer_requires_agent_key(client, db):
     resp = client.post(
         "/api/v1/routing/request-transfer",
         json={"call_id": "vg_transfer_x"},
+    )
+    assert resp.status_code == 401
+
+
+# --- §5.10 check-insurance (mocked, ask-only, never gates booking) ----------
+
+
+def _mock_insurance_extraction(monkeypatch, carrier_name=None, plan_tier=None):
+    """Mocks the LLM carrier/tier-extraction call check_insurance makes --
+    same pattern as _mock_extraction for find_doctor_by_name."""
+    _mock_llm(monkeypatch, {"carrier_name": carrier_name, "plan_tier": plan_tier})
+
+
+def test_check_insurance_hmo_tier_needs_referral(client, db, agent_headers, monkeypatch):
+    carrier = InsuranceCarrier(name="Oscar")
+    db.add(carrier)
+    db.flush()
+    db.add(InsuranceReferralRule(carrier_id=carrier.id, plan_tier="HMO", requires_referral=True))
+    db.add(InsuranceReferralRule(carrier_id=carrier.id, plan_tier="PPO", requires_referral=False))
+    db.commit()
+    _mock_insurance_extraction(monkeypatch, carrier_name="Oscar")
+
+    resp = client.post(
+        "/api/v1/routing/check-insurance",
+        json={"carrier_name": "Oscar", "plan_tier": "HMO", "call_id": "vg_ins1"},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched_needs_referral"
+    assert body["carrier"] == "Oscar"
+    assert "referral" in body["referral_question"].lower()
+
+
+def test_check_insurance_ppo_tier_of_same_carrier_skips_referral(client, db, agent_headers, monkeypatch):
+    """Same carrier as the HMO test above, different tier -- proves the
+    referral requirement is genuinely tier-dependent, not just carrier-wide."""
+    carrier = InsuranceCarrier(name="Oscar")
+    db.add(carrier)
+    db.flush()
+    db.add(InsuranceReferralRule(carrier_id=carrier.id, plan_tier="HMO", requires_referral=True))
+    db.add(InsuranceReferralRule(carrier_id=carrier.id, plan_tier="PPO", requires_referral=False))
+    db.commit()
+    _mock_insurance_extraction(monkeypatch, carrier_name="Oscar")
+
+    resp = client.post(
+        "/api/v1/routing/check-insurance",
+        json={"carrier_name": "Oscar", "plan_tier": "PPO", "call_id": "vg_ins2"},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched_no_referral"
+    assert body["referral_question"] is None
+
+
+def test_check_insurance_carrier_with_no_referral_rules_never_asks(
+    client, db, agent_headers, monkeypatch
+):
+    """A carrier with zero InsuranceReferralRule rows at all (any tier) --
+    proves the skip-the-question path works via rule-absence, not just the
+    ask-it path."""
+    carrier = InsuranceCarrier(name="Aetna")
+    db.add(carrier)
+    db.commit()
+    _mock_insurance_extraction(monkeypatch, carrier_name="Aetna")
+
+    resp = client.post(
+        "/api/v1/routing/check-insurance",
+        json={"carrier_name": "Aetna", "plan_tier": "HMO", "call_id": "vg_ins3"},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched_no_referral"
+    assert body["referral_question"] is None
+
+
+def test_check_insurance_no_tier_given_falls_back_to_carrier_wide_rule(client, db, agent_headers, monkeypatch):
+    """No plan_tier stated -- falls back to the carrier-wide (plan_tier=NULL)
+    rule, not a tier-specific one. No carrier-wide row exists here, so this
+    degrades to no_referral rather than guessing which tier applies."""
+    carrier = InsuranceCarrier(name="Oscar")
+    db.add(carrier)
+    db.flush()
+    db.add(InsuranceReferralRule(carrier_id=carrier.id, plan_tier="HMO", requires_referral=True))
+    db.commit()
+    _mock_insurance_extraction(monkeypatch, carrier_name="Oscar")
+
+    resp = client.post(
+        "/api/v1/routing/check-insurance",
+        json={"carrier_name": "Oscar", "call_id": "vg_ins4"},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched_no_referral"
+
+
+def test_check_insurance_carrier_wide_rule_used_when_tier_unstated(client, db, agent_headers, monkeypatch):
+    """A real carrier-wide rule (plan_tier=NULL) DOES get used when no tier
+    is stated -- distinguishes 'no rule exists' (prior test) from 'a rule
+    exists and applies by default'."""
+    carrier = InsuranceCarrier(name="QualCare")
+    db.add(carrier)
+    db.flush()
+    db.add(InsuranceReferralRule(carrier_id=carrier.id, plan_tier=None, requires_referral=True))
+    db.commit()
+    _mock_insurance_extraction(monkeypatch, carrier_name="QualCare")
+
+    resp = client.post(
+        "/api/v1/routing/check-insurance",
+        json={"carrier_name": "QualCare", "call_id": "vg_ins5"},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched_needs_referral"
+
+
+def test_check_insurance_unrecognized_carrier_degrades_honestly(client, db, agent_headers, monkeypatch):
+    _mock_insurance_extraction(monkeypatch, carrier_name="Definitely Not A Real Insurance Company Xyz")
+
+    resp = client.post(
+        "/api/v1/routing/check-insurance",
+        json={"carrier_name": "Definitely Not A Real Insurance Company Xyz", "call_id": "vg_ins6"},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "unrecognized"
+    assert body["carrier"] is None
+    assert body["referral_question"] is None
+
+
+def test_check_insurance_fuzzy_matches_carrier_name(client, db, agent_headers, monkeypatch):
+    carrier = InsuranceCarrier(name="Oscar")
+    db.add(carrier)
+    db.commit()
+    _mock_insurance_extraction(monkeypatch, carrier_name="oscar health insurance")
+
+    resp = client.post(
+        "/api/v1/routing/check-insurance",
+        json={"carrier_name": "oscar health insurance", "call_id": "vg_ins7"},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched_no_referral"
+    assert body["carrier"] == "Oscar"
+
+
+def test_check_insurance_extracts_tier_from_free_text(client, db, agent_headers, monkeypatch):
+    """The flow only ever sends the caller's raw free-text answer (no
+    separate plan_tier field -- confirmed by reading check_insurance_fn's
+    inputs in vogent_flow.py) -- this is the real path a live call takes,
+    not the plan_tier-passed-directly shortcut the other tests use."""
+    carrier = InsuranceCarrier(name="Oscar")
+    db.add(carrier)
+    db.flush()
+    db.add(InsuranceReferralRule(carrier_id=carrier.id, plan_tier="HMO", requires_referral=True))
+    db.add(InsuranceReferralRule(carrier_id=carrier.id, plan_tier="PPO", requires_referral=False))
+    db.commit()
+    _mock_insurance_extraction(monkeypatch, carrier_name="Oscar", plan_tier="HMO")
+
+    resp = client.post(
+        "/api/v1/routing/check-insurance",
+        # No plan_tier field at all -- only what the real flow ever sends.
+        json={"carrier_name": "I have Oscar, it's the HMO plan through my job", "call_id": "vg_ins8"},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched_needs_referral"
+    assert body["carrier"] == "Oscar"
+
+
+def test_check_insurance_medicare_traditional_no_referral(client, db, agent_headers, monkeypatch):
+    carrier = InsuranceCarrier(name="Medicare")
+    db.add(carrier)
+    db.flush()
+    db.add(InsuranceReferralRule(carrier_id=carrier.id, plan_tier="Traditional", requires_referral=False))
+    db.add(InsuranceReferralRule(carrier_id=carrier.id, plan_tier="Advantage HMO", requires_referral=True))
+    db.commit()
+    _mock_insurance_extraction(monkeypatch, carrier_name="Medicare", plan_tier="Traditional")
+
+    resp = client.post(
+        "/api/v1/routing/check-insurance",
+        json={"carrier_name": "I just have regular Medicare", "call_id": "vg_ins9"},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched_no_referral"
+
+
+def test_check_insurance_medicare_advantage_needs_referral(client, db, agent_headers, monkeypatch):
+    carrier = InsuranceCarrier(name="Medicare")
+    db.add(carrier)
+    db.flush()
+    db.add(InsuranceReferralRule(carrier_id=carrier.id, plan_tier="Traditional", requires_referral=False))
+    db.add(InsuranceReferralRule(carrier_id=carrier.id, plan_tier="Advantage HMO", requires_referral=True))
+    db.commit()
+    _mock_insurance_extraction(monkeypatch, carrier_name="Medicare", plan_tier="Advantage HMO")
+
+    resp = client.post(
+        "/api/v1/routing/check-insurance",
+        json={"carrier_name": "I have Medicare Advantage", "call_id": "vg_ins10"},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched_needs_referral"
+    assert body["carrier"] == "Medicare"
+
+
+def test_check_insurance_normalizes_commercial_brand_to_medicare(client, db, agent_headers, monkeypatch):
+    """A caller naming the commercial carrier that SELLS their Medicare
+    Advantage plan (e.g. Humana) must still resolve to the underlying
+    Medicare referral rule, not an unrecognized "Humana" carrier -- the
+    extraction prompt is explicitly instructed to normalize this."""
+    carrier = InsuranceCarrier(name="Medicare")
+    db.add(carrier)
+    db.flush()
+    db.add(InsuranceReferralRule(carrier_id=carrier.id, plan_tier="Advantage HMO", requires_referral=True))
+    db.commit()
+    _mock_insurance_extraction(monkeypatch, carrier_name="Medicare", plan_tier="Advantage HMO")
+
+    resp = client.post(
+        "/api/v1/routing/check-insurance",
+        json={"carrier_name": "Humana Medicare Advantage", "call_id": "vg_ins11"},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched_needs_referral"
+    assert body["carrier"] == "Medicare"
+
+
+def test_check_insurance_medicaid_needs_referral_via_carrier_wide_rule(client, db, agent_headers, monkeypatch):
+    """Medicaid uses the real (not just test-only) exercise of the
+    carrier-wide plan_tier=NULL fallback -- most Medicaid plans require a
+    referral regardless of tier."""
+    carrier = InsuranceCarrier(name="Medicaid")
+    db.add(carrier)
+    db.flush()
+    db.add(InsuranceReferralRule(carrier_id=carrier.id, plan_tier=None, requires_referral=True))
+    db.commit()
+    _mock_insurance_extraction(monkeypatch, carrier_name="Medicaid")
+
+    resp = client.post(
+        "/api/v1/routing/check-insurance",
+        json={"carrier_name": "I'm on Medicaid", "call_id": "vg_ins12"},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "matched_needs_referral"
+
+
+def test_check_insurance_extraction_failure_falls_back_to_raw_text(client, db, agent_headers, monkeypatch):
+    """If the extraction call itself fails (transport error, bad JSON),
+    check_insurance must degrade to fuzzy-matching the raw answer text
+    rather than erroring -- same fail-open contract
+    _extract_doctor_practice_gender already has."""
+    def _boom():
+        raise RuntimeError("transport error")
+
+    monkeypatch.setattr(routing_module, "_anthropic_client", _boom)
+    carrier = InsuranceCarrier(name="Oscar")
+    db.add(carrier)
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/routing/check-insurance",
+        json={"carrier_name": "Oscar", "call_id": "vg_ins13"},
+        headers=agent_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["status"] == "matched_no_referral"
+    assert body["carrier"] == "Oscar"
+
+
+def test_check_insurance_requires_agent_key(client, db):
+    resp = client.post(
+        "/api/v1/routing/check-insurance",
+        json={"carrier_name": "Oscar"},
     )
     assert resp.status_code == 401
