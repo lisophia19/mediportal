@@ -867,9 +867,15 @@ _DOCTOR_NAME_EXTRACT_PROMPT = """A caller to an orthopedic practice's phone-book
 agent was asked whether they have a specific doctor or office in mind. Extract any \
 doctor name, office/location name, and doctor-gender preference they mentioned from \
 their answer below. Ignore titles like "Doctor" or "Dr." -- extract just the name \
-itself. If they didn't name a specific doctor, or a specific office, or state a \
-gender preference, leave that field null. Never guess a name or preference that \
-wasn't actually said.
+itself. The location doesn't have to be stated as an exact office name -- "closest \
+to Huntington", "somewhere near Huntington", or "around Huntington" are all a real \
+location preference naming "Huntington", not a vague area preference to ignore; \
+extract the place name they said either way. The one exception: if the caller is \
+EXCLUDING or ruling out a location ("not near Huntington", "anywhere but \
+Huntington", "I don't want Huntington"), leave practice_name null -- never extract \
+a place name they said they do NOT want. If they didn't name a specific doctor, or \
+any location/area at all, or state a gender preference, leave that field null. \
+Never guess a name or preference that wasn't actually said.
 
 Caller's answer: "{answer}"
 

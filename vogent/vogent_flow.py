@@ -1173,9 +1173,21 @@ nodes = [
     question_node(
         "confirm_triage_1", "confirm-triage-1",
         "{{node.resolve_triage_fn.confirm_prompt}}",
-        answer_guidelines="Classify the caller's reply as YES or NO for the answer field only -- never say the word YES or NO out loud yourself.",
+        answer_guidelines=(
+            "Classify the caller's reply as YES, NO, or TRANSFER for the answer field "
+            "only -- never say the word YES, NO, or TRANSFER out loud yourself. Respond "
+            "TRANSFER only if the caller explicitly asks to be transferred, routed, or "
+            "connected to a different line/department instead of continuing -- not for "
+            "an ordinary yes/no answer to the question just asked."
+        ),
         transitions=[
             equal("confirm_triage_1", "answer", "YES", "save_term_triaged_1"),
+            # Caller-requested transfer escape hatch (spec §5.9), same as
+            # confirm_complaint -- found live that without this, a caller
+            # asking to be transferred mid-triage gets misread as NO and
+            # bounced through offer_triage_alternate_1 / a full restart
+            # instead, several confusing rounds before it ever resolves.
+            equal("confirm_triage_1", "answer", "TRANSFER", "request_transfer_triage_1_fn"),
             # A "no" here must NOT discard the whole triage result and
             # restart the call from "what can we help you with" -- found
             # live: this exact NO -> ask_complaint reset led to a caller
@@ -1196,6 +1208,16 @@ nodes = [
         outputs=[out("status", "STRING")],
         transitions=[always("ask_first_name")],
     ),
+    function_node(
+        "request_transfer_triage_1_fn", "request-transfer-triage-1-fn", "request_transfer",
+        inputs={"term_id": "{{node.resolve_triage_fn.term.id}}"},
+        outputs=[out("status", "STRING"), out("spoken_response", "STRING")],
+        transitions=[always("dead_end_requested_transfer_triage_1")],
+    ),
+    freeform_node(
+        "dead_end_requested_transfer_triage_1", "dead-end-requested-transfer-triage-1",
+        "Say exactly: {{node.request_transfer_triage_1_fn.spoken_response}} Then say <|hangup|>.",
+    ),
     question_node(
         "offer_triage_alternate_1", "offer-triage-alternate-1",
         (
@@ -1203,12 +1225,22 @@ nodes = [
             "could instead be {{node.resolve_triage_fn.alternate_1_label}}."
         ),
         answer_guidelines=(
-            "If the caller agrees it's this alternate, respond with exactly YES. "
-            "If they say no, or describe their issue differently, respond with "
-            "exactly NO."
+            "If the caller agrees it's this alternate, respond with exactly YES. If "
+            "they explicitly ask to be transferred, routed, or connected to a "
+            "different line/department instead of continuing, respond with exactly "
+            "TRANSFER. Otherwise (they say no, or describe their issue differently), "
+            "respond with exactly NO."
         ),
         transitions=[
             equal("offer_triage_alternate_1", "answer", "YES", "save_term_triaged_alt_1"),
+            # Caller-requested transfer (spec §5.9) -- found live that a
+            # caller giving up here and asking to be transferred was
+            # misread as NO/off-topic and sent all the way back to
+            # ask_complaint instead. Reuses request_transfer_triage_1_fn
+            # (the original proposed term, not the alternate) since both
+            # candidates in an ambiguous pair typically share the same
+            # body_part/category and so resolve to the same department.
+            equal("offer_triage_alternate_1", "answer", "TRANSFER", "request_transfer_triage_1_fn"),
             # Both round-1 candidates now rejected -- restarting via
             # ask_complaint is a known, deferred residual risk (a genuinely
             # new 3rd discriminating question would be better, but that
@@ -1258,9 +1290,16 @@ nodes = [
     question_node(
         "confirm_triage_2", "confirm-triage-2",
         "{{node.resolve_triage_retry_fn.confirm_prompt}}",
-        answer_guidelines="Classify the caller's reply as YES or NO for the answer field only -- never say the word YES or NO out loud yourself.",
+        answer_guidelines=(
+            "Classify the caller's reply as YES, NO, or TRANSFER for the answer field "
+            "only -- never say the word YES, NO, or TRANSFER out loud yourself. Respond "
+            "TRANSFER only if the caller explicitly asks to be transferred, routed, or "
+            "connected to a different line/department instead of continuing -- not for "
+            "an ordinary yes/no answer to the question just asked."
+        ),
         transitions=[
             equal("confirm_triage_2", "answer", "YES", "save_term_triaged_2"),
+            equal("confirm_triage_2", "answer", "TRANSFER", "request_transfer_triage_2_fn"),
             # See confirm_triage_1 for why this offers the other candidate
             # instead of restarting the call.
             always("offer_triage_alternate_2"),
@@ -1275,6 +1314,16 @@ nodes = [
         outputs=[out("status", "STRING")],
         transitions=[always("ask_first_name")],
     ),
+    function_node(
+        "request_transfer_triage_2_fn", "request-transfer-triage-2-fn", "request_transfer",
+        inputs={"term_id": "{{node.resolve_triage_retry_fn.term.id}}"},
+        outputs=[out("status", "STRING"), out("spoken_response", "STRING")],
+        transitions=[always("dead_end_requested_transfer_triage_2")],
+    ),
+    freeform_node(
+        "dead_end_requested_transfer_triage_2", "dead-end-requested-transfer-triage-2",
+        "Say exactly: {{node.request_transfer_triage_2_fn.spoken_response}} Then say <|hangup|>.",
+    ),
     question_node(
         "offer_triage_alternate_2", "offer-triage-alternate-2",
         (
@@ -1282,12 +1331,16 @@ nodes = [
             "could instead be {{node.resolve_triage_retry_fn.alternate_1_label}}."
         ),
         answer_guidelines=(
-            "If the caller agrees it's this alternate, respond with exactly YES. "
-            "If they say no, or describe their issue differently, respond with "
-            "exactly NO."
+            "If the caller agrees it's this alternate, respond with exactly YES. If "
+            "they explicitly ask to be transferred, routed, or connected to a "
+            "different line/department instead of continuing, respond with exactly "
+            "TRANSFER. Otherwise (they say no, or describe their issue differently), "
+            "respond with exactly NO."
         ),
         transitions=[
             equal("offer_triage_alternate_2", "answer", "YES", "save_term_triaged_alt_2"),
+            # See offer_triage_alternate_1's TRANSFER comment.
+            equal("offer_triage_alternate_2", "answer", "TRANSFER", "request_transfer_triage_2_fn"),
             # See offer_triage_alternate_1's fallback comment -- same
             # deferred residual risk, round 3 still exists to recover.
             always("ask_complaint"),
@@ -1335,9 +1388,16 @@ nodes = [
     question_node(
         "confirm_triage_3", "confirm-triage-3",
         "{{node.resolve_triage_retry_2_fn.confirm_prompt}}",
-        answer_guidelines="Classify the caller's reply as YES or NO for the answer field only -- never say the word YES or NO out loud yourself.",
+        answer_guidelines=(
+            "Classify the caller's reply as YES, NO, or TRANSFER for the answer field "
+            "only -- never say the word YES, NO, or TRANSFER out loud yourself. Respond "
+            "TRANSFER only if the caller explicitly asks to be transferred, routed, or "
+            "connected to a different line/department instead of continuing -- not for "
+            "an ordinary yes/no answer to the question just asked."
+        ),
         transitions=[
             equal("confirm_triage_3", "answer", "YES", "save_term_triaged_3"),
+            equal("confirm_triage_3", "answer", "TRANSFER", "request_transfer_triage_3_fn"),
             # See confirm_triage_1 for why this offers the other candidate
             # instead of restarting the call.
             always("offer_triage_alternate_3"),
@@ -1352,6 +1412,16 @@ nodes = [
         outputs=[out("status", "STRING")],
         transitions=[always("ask_first_name")],
     ),
+    function_node(
+        "request_transfer_triage_3_fn", "request-transfer-triage-3-fn", "request_transfer",
+        inputs={"term_id": "{{node.resolve_triage_retry_2_fn.term.id}}"},
+        outputs=[out("status", "STRING"), out("spoken_response", "STRING")],
+        transitions=[always("dead_end_requested_transfer_triage_3")],
+    ),
+    freeform_node(
+        "dead_end_requested_transfer_triage_3", "dead-end-requested-transfer-triage-3",
+        "Say exactly: {{node.request_transfer_triage_3_fn.spoken_response}} Then say <|hangup|>.",
+    ),
     question_node(
         "offer_triage_alternate_3", "offer-triage-alternate-3",
         (
@@ -1359,12 +1429,16 @@ nodes = [
             "could instead be {{node.resolve_triage_retry_2_fn.alternate_1_label}}."
         ),
         answer_guidelines=(
-            "If the caller agrees it's this alternate, respond with exactly YES. "
-            "If they say no, or describe their issue differently, respond with "
-            "exactly NO."
+            "If the caller agrees it's this alternate, respond with exactly YES. If "
+            "they explicitly ask to be transferred, routed, or connected to a "
+            "different line/department instead of continuing, respond with exactly "
+            "TRANSFER. Otherwise (they say no, or describe their issue differently), "
+            "respond with exactly NO."
         ),
         transitions=[
             equal("offer_triage_alternate_3", "answer", "YES", "save_term_triaged_alt_3"),
+            # See offer_triage_alternate_1's TRANSFER comment.
+            equal("offer_triage_alternate_3", "answer", "TRANSFER", "request_transfer_triage_3_fn"),
             # Round 3 is the final round -- both triage candidates are now
             # genuinely exhausted, so this must end honestly (matching
             # resolve_triage_retry_2_fn's own still_unclear handling above),
