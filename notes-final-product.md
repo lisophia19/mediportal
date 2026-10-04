@@ -121,12 +121,14 @@ it freely as more requirements surface. Nothing here is committed to or schedule
 
 - **Reschedule and cancellation** over the phone. Needs appointment lookup by patient,
   plus a cancellation policy and slot release.
-- **Human escalation / warm transfer.** Baseline gives callers a real desk number to
-  call back for the routing dead ends that have one (`not_covered`/`age_restricted` via
-  the §5.9 directory redirect), but never actually transfers the live call — the caller
-  has to hang up and redial. Genuine warm transfer (keeping the caller on the line) is
-  deferred, as is any redirect/desk-number fallback for the urgent-no-slots case noted
-  above under Clinical scope.
+- **Human escalation / warm transfer -- wording doesn't match behavior yet.** For the
+  routing dead ends that have a desk number (`not_covered`/`age_restricted` via the
+  §5.9 directory redirect), the agent now says "I'm going to transfer you to our
+  [X] line -- that's [number]" -- a deliberate product choice, but it's not literally
+  true: Vogent has no live call-transfer capability (confirmed against their API
+  docs), so the caller still has to hang up and redial themselves. Genuine warm
+  transfer (keeping the caller on the line) is deferred, as is any redirect/desk-number
+  fallback for the urgent-no-slots case noted above under Clinical scope.
 - **Callback queue.** Every baseline dead end (`no_match`, `no_slots`, `failed`) should
   create a real work item for staff, not just a logged call status.
 - **Multi-appointment calls.** Caller booking for a spouse or child, or booking two

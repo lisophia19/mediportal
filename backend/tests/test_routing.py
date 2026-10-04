@@ -1169,6 +1169,8 @@ def test_find_doctors_not_covered_with_directory_redirect(client, db, agent_head
     assert body["status"] == "no_eligible_doctor"
     assert body["reason"] == "not_covered"
     assert body["directory_redirect"] == {"contact": "Spine", "desk_number": "844-887-7463"}
+    assert "transfer you to our Spine line" in body["spoken_response"]
+    assert "844-887-7463" in body["spoken_response"]
 
 
 def test_find_doctors_not_covered_without_redirect_falls_back_to_main_line(client, db, agent_headers):
@@ -1185,6 +1187,7 @@ def test_find_doctors_not_covered_without_redirect_falls_back_to_main_line(clien
     assert body["status"] == "no_eligible_doctor"
     assert body["reason"] == "not_covered"
     assert body["directory_redirect"] is None
+    assert "transfer you to our main office" in body["spoken_response"]
     assert "631-555-1000" in body["spoken_response"]
 
 

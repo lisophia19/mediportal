@@ -610,13 +610,18 @@ def _no_eligible_doctor_response(reason, term, caller_coords):
     else:
         base = "We don't have a doctor here who treats that."
 
+    # "Transfer" wording is aspirational, not literal -- Vogent has no live
+    # call-transfer capability (confirmed against their API docs), so this
+    # just speaks the number and the caller has to hang up and redial.
+    # Framed as a transfer anyway per product decision, with the gap noted
+    # in notes-final-product.md, since a real warm transfer is deferred work.
     redirect = _directory_redirect_for(term)
     if redirect:
-        spoken = f"{base} Let me give you the number for our {redirect['contact']} line -- that's {redirect['desk_number']}."
+        spoken = f"{base} I'm going to transfer you to our {redirect['contact']} line -- that's {redirect['desk_number']}."
     else:
         phone = _fallback_main_phone(caller_coords)
         if phone:
-            spoken = f"{base} Let me give you our main office number so we can get you to the right place -- that's {phone}."
+            spoken = f"{base} I'm going to transfer you to our main office -- that's {phone}."
         else:
             spoken = f"{base} Let me have someone from our office call you back to help find the right place for you."
 
