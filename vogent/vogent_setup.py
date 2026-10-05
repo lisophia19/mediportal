@@ -353,6 +353,12 @@ FUNCTIONS = [
 ]
 
 
+# transfer_call (§5.9 real transfer) is a native type:"transfer" function
+# (allowedNumbers allowlist, "destination" input), not an "api" one, so it
+# doesn't fit FUNCTIONS/create_functions() -- registered live by hand instead.
+# Its allowedNumbers must match routing.py's _TRANSFER_ALLOWED_NUMBERS exactly.
+
+
 def create_functions():
     """Creates all functions fresh and returns {name: function_id}. Safe to
     re-run: Vogent doesn't dedupe by name, so re-running creates duplicates --

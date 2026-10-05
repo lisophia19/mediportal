@@ -559,25 +559,33 @@ def _spoken_label(doctor, practice, distance):
     return ", ".join(parts)
 
 
+# Test-mode overlay (§5.9) -- swaps real desk/main numbers for throwaway
+# McDonald's numbers so a tester can dial the spoken-back number and confirm
+# routing without touching a real line. Read-time only, gated on
+# DIRECTORY_TEST_MODE; an unmapped contact falls through to its real number.
+_TEST_MODE_DESK_NUMBERS = {
+    "Spine": "+18042221111",
+    "Pain Management": "+18043209511",
+    "Orthopedic Oncology": "+16148824762",
+    "Concussion": "+15129969449",
+}
+_TEST_MODE_MAIN_PHONE = "+16144212984"
+
+# transfer_call's Vogent allowlist must match this set exactly (see
+# vogent_setup.py) -- derived from the test numbers above since every one of
+# them is also what we register as transfer-eligible for this test phase.
+_TRANSFER_ALLOWED_NUMBERS = set(_TEST_MODE_DESK_NUMBERS.values()) | {_TEST_MODE_MAIN_PHONE}
+
+
 def _fallback_main_phone(caller_coords):
     practices = Practice.query.all()
     if not practices:
         return None
     best_practice, _ = _nearest_by_coords(practices, caller_coords)
-    return (best_practice or practices[0]).main_phone
-
-
-# Test-mode desk number overlay (§5.9) -- swaps a real Northwell desk number
-# for a throwaway test number so a human tester can dial the spoken-back
-# number and independently confirm the agent picked the right contact,
-# without ever touching a real department line. Read-time only -- the real
-# seeded DirectoryEntry data is never modified, and production is unaffected
-# unless DIRECTORY_TEST_MODE is explicitly set. An unmapped contact falls
-# through to its real number even in test mode; add more entries here as
-# more test numbers become available.
-_TEST_MODE_DESK_NUMBERS = {
-    "Spine": "+18042221111",
-}
+    real_phone = (best_practice or practices[0]).main_phone
+    if os.environ.get("DIRECTORY_TEST_MODE", "").lower() in ("1", "true", "yes"):
+        return _TEST_MODE_MAIN_PHONE
+    return real_phone
 
 
 def _test_mode_desk_number(contact):
@@ -624,20 +632,19 @@ def _eligibility_reason_for_doctor(doctor_id, term, age):
 
 def _redirect_or_fallback_spoken(term, caller_coords, prefix):
     """Resolves `term` to a directory redirect, falling back to the nearest
-    practice's main line, falling back to an honest callback offer.
-    `prefix` leads into the shared "I'm going to transfer you..." phrasing
-    -- wording only, since Vogent can't actually transfer a live call (see
-    notes-final-product.md). Returns (redirect_or_None, spoken_text)."""
+    practice's main line, falling back to an honest callback offer. Returns
+    (redirect_or_None, phone_or_None, spoken_text) -- phone is whichever
+    number was actually spoken, for request_transfer's allowlist check."""
     redirect = _directory_redirect_for(term)
     if redirect:
-        return redirect, (
+        return redirect, redirect["desk_number"], (
             f"{prefix} I'm going to transfer you to our {redirect['contact']} "
             f"line -- that's {redirect['desk_number']}."
         )
     phone = _fallback_main_phone(caller_coords)
     if phone:
-        return None, f"{prefix} I'm going to transfer you to our main office -- that's {phone}."
-    return None, f"{prefix} Let me have someone from our office call you back to help find the right place for you."
+        return None, phone, f"{prefix} I'm going to transfer you to our main office -- that's {phone}."
+    return None, None, f"{prefix} Let me have someone from our office call you back to help find the right place for you."
 
 
 def _no_eligible_doctor_response(reason, term, caller_coords):
@@ -650,7 +657,7 @@ def _no_eligible_doctor_response(reason, term, caller_coords):
     else:
         base = "We don't have a doctor here who treats that."
 
-    redirect, spoken = _redirect_or_fallback_spoken(term, caller_coords, base)
+    redirect, _phone, spoken = _redirect_or_fallback_spoken(term, caller_coords, base)
     return jsonify(
         {
             "status": "no_eligible_doctor",
@@ -667,7 +674,11 @@ def request_transfer():
     """§5.9 caller-initiated escape hatch -- maps through the same
     DirectoryRedirectRule lookup as the automatic dead end, keyed off the
     complaint already on the call. term_id is required; the one caller
-    (request_transfer_fn) always has it from match_issue_fn's output."""
+    (request_transfer_fn) always has it from match_issue_fn's output.
+
+    status is "redirect_transfer" (desk number is on Vogent's transfer
+    allowlist -- flow does a real live transfer), "redirect" (a desk number
+    exists but isn't allowlisted -- speak it only), or "no_redirect"."""
     payload = get_agent_json()
     term_id = coerce_int(payload.get("term_id"))
     term = db.session.get(Term, term_id) if term_id else None
@@ -677,6 +688,7 @@ def request_transfer():
             {
                 "status": "no_redirect",
                 "directory_redirect": None,
+                "transfer_number": None,
                 "spoken_response": (
                     "I don't have enough yet to know exactly who to transfer you to "
                     "-- let me have someone from our office call you back instead."
@@ -689,11 +701,19 @@ def request_transfer():
     # _fallback_main_phone degrades gracefully to the first practice when
     # caller_coords is None.
     caller_coords = _zip_coords(payload.get("zip"))
-    redirect, spoken = _redirect_or_fallback_spoken(term, caller_coords, "Of course --")
+    redirect, phone, spoken = _redirect_or_fallback_spoken(term, caller_coords, "Of course --")
+    transfer_number = phone if phone in _TRANSFER_ALLOWED_NUMBERS else None
+    if transfer_number:
+        status = "redirect_transfer"
+    elif redirect:
+        status = "redirect"
+    else:
+        status = "no_redirect"
     return jsonify(
         {
-            "status": "redirect" if redirect else "no_redirect",
+            "status": status,
             "directory_redirect": redirect,
+            "transfer_number": transfer_number,
             "spoken_response": spoken,
         }
     )

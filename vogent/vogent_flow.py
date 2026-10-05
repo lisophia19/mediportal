@@ -131,11 +131,11 @@ def function_node(node_id, name, function_name, inputs, outputs, transitions, st
 
 
 def freeform_node(node_id, name, prompt, transitions=None):
-    """Every existing use is a terminal dead end (transitions=None -> [],
-    prompt ends in <|hangup|>) -- transitions is for the one exception: a
-    node that just speaks something conditional (full instruction-following
-    prompt, unlike functionStartedMessage's literal-text-only field) and
-    then continues on its own, no caller answer needed."""
+    """Most uses are a terminal dead end (transitions=None -> [], prompt ends
+    in <|hangup|>) -- transitions is for the exception: a node that just
+    speaks something conditional (full instruction-following prompt, unlike
+    functionStartedMessage's literal-text-only field) and then continues on
+    its own, no caller answer needed."""
     return {
         "id": node_id,
         "name": name,
@@ -1125,8 +1125,13 @@ nodes = [
             # a real spoken line, unlike some other endpoints' optional
             # spoken_response fields.
             out("spoken_response", "STRING"),
+            out("transfer_number", "STRING", nullable=True),
         ],
-        transitions=[always("dead_end_requested_transfer")],
+        transitions=[
+            # Real transfer (§5.9) when the desk number is allowlisted.
+            equal("request_transfer_fn", "status", "redirect_transfer", "speak_then_transfer_request_transfer_fn"),
+            always("dead_end_requested_transfer"),
+        ],
     ),
     freeform_node(
         "dead_end_requested_transfer", "dead-end-requested-transfer",
@@ -1247,8 +1252,18 @@ nodes = [
     function_node(
         "request_transfer_triage_1_fn", "request-transfer-triage-1-fn", "request_transfer",
         inputs={"term_id": "{{node.resolve_triage_fn.term.id}}"},
-        outputs=[out("status", "STRING"), out("spoken_response", "STRING")],
-        transitions=[always("dead_end_requested_transfer_triage_1")],
+        outputs=[
+            out("status", "STRING"),
+            out("spoken_response", "STRING"),
+            out("transfer_number", "STRING", nullable=True),
+        ],
+        transitions=[
+            equal(
+                "request_transfer_triage_1_fn", "status", "redirect_transfer",
+                "speak_then_transfer_request_transfer_triage_1_fn",
+            ),
+            always("dead_end_requested_transfer_triage_1"),
+        ],
     ),
     freeform_node(
         "dead_end_requested_transfer_triage_1", "dead-end-requested-transfer-triage-1",
@@ -1353,8 +1368,18 @@ nodes = [
     function_node(
         "request_transfer_triage_2_fn", "request-transfer-triage-2-fn", "request_transfer",
         inputs={"term_id": "{{node.resolve_triage_retry_fn.term.id}}"},
-        outputs=[out("status", "STRING"), out("spoken_response", "STRING")],
-        transitions=[always("dead_end_requested_transfer_triage_2")],
+        outputs=[
+            out("status", "STRING"),
+            out("spoken_response", "STRING"),
+            out("transfer_number", "STRING", nullable=True),
+        ],
+        transitions=[
+            equal(
+                "request_transfer_triage_2_fn", "status", "redirect_transfer",
+                "speak_then_transfer_request_transfer_triage_2_fn",
+            ),
+            always("dead_end_requested_transfer_triage_2"),
+        ],
     ),
     freeform_node(
         "dead_end_requested_transfer_triage_2", "dead-end-requested-transfer-triage-2",
@@ -1451,8 +1476,18 @@ nodes = [
     function_node(
         "request_transfer_triage_3_fn", "request-transfer-triage-3-fn", "request_transfer",
         inputs={"term_id": "{{node.resolve_triage_retry_2_fn.term.id}}"},
-        outputs=[out("status", "STRING"), out("spoken_response", "STRING")],
-        transitions=[always("dead_end_requested_transfer_triage_3")],
+        outputs=[
+            out("status", "STRING"),
+            out("spoken_response", "STRING"),
+            out("transfer_number", "STRING", nullable=True),
+        ],
+        transitions=[
+            equal(
+                "request_transfer_triage_3_fn", "status", "redirect_transfer",
+                "speak_then_transfer_request_transfer_triage_3_fn",
+            ),
+            always("dead_end_requested_transfer_triage_3"),
+        ],
     ),
     freeform_node(
         "dead_end_requested_transfer_triage_3", "dead-end-requested-transfer-triage-3",
@@ -2088,6 +2123,36 @@ nodes = [
         ),
     ),
 ]
+
+
+def _real_transfer_chain(request_transfer_fn_id):
+    """§5.9 real transfer -- speaks the same line as the wording-only dead
+    end, then actually transfers via transfer_call. One copy per
+    request_transfer_fn-family call site, same pattern as _slot_taken_retry_chain."""
+    speak_id = f"speak_then_transfer_{request_transfer_fn_id}"
+    transfer_fn_id = f"do_{request_transfer_fn_id}"
+    return [
+        freeform_node(
+            speak_id, speak_id.replace("_", "-"),
+            f"Say exactly: {{{{node.{request_transfer_fn_id}.spoken_response}}}} Then transfer the call.",
+            transitions=[always(transfer_fn_id)],
+        ),
+        function_node(
+            transfer_fn_id, transfer_fn_id.replace("_", "-"), "transfer_call",
+            inputs={"destination": f"{{{{node.{request_transfer_fn_id}.transfer_number}}}}"},
+            outputs=[],
+            transitions=[],
+        ),
+    ]
+
+
+for _request_transfer_fn_id in (
+    "request_transfer_fn",
+    "request_transfer_triage_1_fn",
+    "request_transfer_triage_2_fn",
+    "request_transfer_triage_3_fn",
+):
+    nodes.extend(_real_transfer_chain(_request_transfer_fn_id))
 
 
 def _slot_taken_retry_chain(book_node_id):

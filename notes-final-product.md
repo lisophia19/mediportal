@@ -121,14 +121,15 @@ it freely as more requirements surface. Nothing here is committed to or schedule
 
 - **Reschedule and cancellation** over the phone. Needs appointment lookup by patient,
   plus a cancellation policy and slot release.
-- **Human escalation / warm transfer -- wording doesn't match behavior yet.** For the
-  routing dead ends that have a desk number (`not_covered`/`age_restricted` via the
-  §5.9 directory redirect), the agent now says "I'm going to transfer you to our
-  [X] line -- that's [number]" -- a deliberate product choice, but it's not literally
-  true: Vogent has no live call-transfer capability (confirmed against their API
-  docs), so the caller still has to hang up and redial themselves. Genuine warm
-  transfer (keeping the caller on the line) is deferred, as is any redirect/desk-number
-  fallback for the urgent-no-slots case noted above under Clinical scope.
+- **Human escalation / warm transfer -- real for the caller-requested escape hatch,
+  wording-only elsewhere.** Vogent *functions* (not flow nodes) support a native
+  `type: "transfer"`; §5.9's escape hatch now really transfers via `transfer_call`
+  when the resolved number is on Vogent's allowlist (5 mocked test numbers today,
+  real desk numbers need E.164 formatting + registration first). Not yet verified
+  live (empty wallet during dev) -- post-transfer/failure flow behavior is unknown.
+  The automatic no-eligible-doctor dead end still only speaks the number; converting
+  it is easy (reuse `_real_transfer_chain`) but deferred until the escape hatch is
+  verified live first. Urgent-no-slots redirect fallback also still deferred.
 - **Insurance intake -- researched, deliberately deferred beyond carrier + referral.**
   §5.10 currently asks carrier and (when the mocked rule says so) a referral question,
   nothing else. Researched what else a real orthopedic front desk typically collects;

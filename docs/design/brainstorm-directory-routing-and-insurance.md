@@ -31,17 +31,13 @@ This already satisfies the user's first stated condition — **route only when w
 genuinely can't schedule for the reason** — for the one path that currently reaches
 a hard dead end.
 
-### Confirmed constraint: Vogent has no live call-transfer
+### Correction: Vogent DOES support live call-transfer
 
-Checked Vogent's own API docs (`docs.vogent.ai`) directly: the Flow Builder only
-has 3 node types (`function_call`, `question`, `freeform`) and none of them
-transfer a live call. The only transfer-shaped field anywhere on the agent is
-`timeoutBehaviorConfiguration.transferNumber` — a single **static, agent-level**
-number used only when the caller times out from silence, not something settable
-per-call from flow logic. So "route to a number" cannot mean a live warm
-handoff today; it means **the agent speaks the number to the caller**, which is
-exactly what's already built. Genuine warm transfer stays a deferred item (already
-flagged as such in `notes-final-product.md`).
+**Earlier conclusion in this doc was wrong** -- it only checked flow *node*
+types and missed that Vogent *functions* have their own `type: "transfer"`
+(allowlisted `destination`, live transfer). Built as `transfer_call`; the
+§5.9 escape hatch now really transfers when the resolved number is on the
+allowlist, else falls back to speaking it. See `notes-final-product.md`.
 
 ### What's actually new to build
 

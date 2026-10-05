@@ -19,5 +19,6 @@
   "get_imaging_availability": "ed91138b-205c-452a-9f1f-0adde855a663",
   "book_imaging": "d3c4d776-bf77-43c5-825c-f24e11764b34",
   "request_transfer": "7f739e9d-b5e0-40d9-b010-9062e488d6bb",
-  "check_insurance": "08b89cca-587f-4528-89ad-e4bc8166a457"
+  "check_insurance": "08b89cca-587f-4528-89ad-e4bc8166a457",
+  "transfer_call": "ba107d58-95a2-4b68-907d-f1f58b402ec2"
 }

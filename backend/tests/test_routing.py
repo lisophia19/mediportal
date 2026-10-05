@@ -1838,6 +1838,8 @@ def test_request_transfer_with_matching_rule_returns_redirect(client, db, agent_
     assert body["directory_redirect"] == {"contact": "Spine", "desk_number": "844-887-7463"}
     assert "transfer you to our Spine line" in body["spoken_response"]
     assert "844-887-7463" in body["spoken_response"]
+    # Real desk number isn't on Vogent's transfer allowlist -- speak only.
+    assert body["transfer_number"] is None
 
 
 def test_request_transfer_test_mode_swaps_mapped_contact_for_mock_number(
@@ -1862,6 +1864,9 @@ def test_request_transfer_test_mode_swaps_mapped_contact_for_mock_number(
     assert body["directory_redirect"]["desk_number"] == "+18042221111"
     assert "844-887-7463" not in body["spoken_response"]
     assert "+18042221111" in body["spoken_response"]
+    # On Vogent's transfer allowlist -- gets a real transfer, not just speech.
+    assert body["status"] == "redirect_transfer"
+    assert body["transfer_number"] == "+18042221111"
 
 
 def test_request_transfer_test_mode_unmapped_contact_falls_through_to_real_number(
@@ -1872,10 +1877,10 @@ def test_request_transfer_test_mode_unmapped_contact_falls_through_to_real_numbe
     erroring, since the overlay is explicitly a partial/expandable mapping."""
     monkeypatch.setenv("DIRECTORY_TEST_MODE", "true")
     term = _make_term(db, term="Lump-Arm", category="Lesion/Mass/Lump/Tumor", body_part="Arm")
-    db.add(DirectoryRedirectRule(category="Lesion/Mass/Lump/Tumor", contact="Orthopedic Oncology"))
+    db.add(DirectoryRedirectRule(category="Lesion/Mass/Lump/Tumor", contact="Billing"))
     db.add(
         DirectoryEntry(
-            contact="Orthopedic Oncology", location="General", group_name="LIBJ", desk_number="833-736-2400"
+            contact="Billing", location="General", group_name="LIBJ", desk_number="833-736-2400"
         )
     )
     db.commit()
@@ -1910,6 +1915,7 @@ def test_request_transfer_without_term_id_is_honest_not_a_crash(client, db, agen
     body = resp.get_json()
     assert body["status"] == "no_redirect"
     assert body["directory_redirect"] is None
+    assert body["transfer_number"] is None
 
 
 def test_request_transfer_no_term_falls_back_honestly(client, db, agent_headers):
@@ -1924,6 +1930,7 @@ def test_request_transfer_no_term_falls_back_honestly(client, db, agent_headers)
     body = resp.get_json()
     assert body["status"] == "no_redirect"
     assert body["directory_redirect"] is None
+    assert body["transfer_number"] is None
     assert "someone from our office call you back" in body["spoken_response"]
 
 
@@ -1940,8 +1947,31 @@ def test_request_transfer_term_with_no_rule_falls_back_to_main_office(client, db
     body = resp.get_json()
     assert body["status"] == "no_redirect"
     assert body["directory_redirect"] is None
+    assert body["transfer_number"] is None
     assert "transfer you to our main office" in body["spoken_response"]
     assert "631-555-1000" in body["spoken_response"]
+
+
+def test_request_transfer_test_mode_main_office_fallback_is_transfer_eligible(
+    client, db, agent_headers, monkeypatch
+):
+    """The main-office fallback (no DirectoryRedirectRule match) also gets a
+    real transfer in test mode, via the 5th allowlisted mock number."""
+    monkeypatch.setenv("DIRECTORY_TEST_MODE", "true")
+    term = _make_term(db, term="Unmapped-Thing", category="Nonexistent", body_part="Unspecified")
+    _make_practice(db, "Riverhead", "11901", lat=40.9176, lon=-72.6620, main_phone="631-555-1000")
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/routing/request-transfer",
+        json={"call_id": "vg_transfer_test_main", "term_id": term.id},
+        headers=agent_headers,
+    )
+    body = resp.get_json()
+    assert body["status"] == "redirect_transfer"
+    assert body["transfer_number"] == "+16144212984"
+    assert "631-555-1000" not in body["spoken_response"]
+    assert "+16144212984" in body["spoken_response"]
 
 
 def test_request_transfer_requires_agent_key(client, db):
