@@ -284,6 +284,23 @@ SCENARIOS = {
         "not orthopedic. If the agent explains they don't treat that and "
         "redirects you elsewhere, accept that gracefully and end the call."
     ),
+    # --- real transfer (spec §5.9) ---------------------------------------
+    "requested_transfer": (
+        "You are a NEW patient calling about ongoing back and neck pain. "
+        "When the agent reads back what it understood and asks you to "
+        "confirm, do NOT say yes or no -- instead clearly ask to be "
+        "transferred or connected to a person instead of continuing. Do "
+        "not expect a booking -- the call should end with the agent "
+        "saying it's transferring you."
+    ),
+    "requested_transfer_procedure": (
+        "You are a NEW patient calling to ask about getting an epidural "
+        "steroid injection. When the agent reads back what it understood "
+        "and asks you to confirm, do NOT say yes or no -- instead clearly "
+        "ask to be transferred or connected to a person instead of "
+        "continuing. Do not expect a booking -- the call should end with "
+        "the agent saying it's transferring you."
+    ),
     # --- resilience ------------------------------------------------------
     "edge_cases": (
         "You are a NEW patient with knee pain after a soccer injury. Be a "

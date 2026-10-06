@@ -2125,25 +2125,20 @@ nodes = [
 ]
 
 
-def _real_transfer_chain(request_transfer_fn_id):
-    """§5.9 real transfer -- speaks the same line as the wording-only dead
-    end, then actually transfers via transfer_call. One copy per
-    request_transfer_fn-family call site, same pattern as _slot_taken_retry_chain."""
+def _real_transfer_node(request_transfer_fn_id):
+    """§5.9 real transfer -- transfer_call is linked to the agent
+    (linkedFunctionDefinitionIds), so the agent invokes it itself when told
+    to in-prompt, same as any other tool call. No separate function_node:
+    that invoked transfer_call deterministically via the flow graph, which
+    silently never fires for a linked-tool-type function (confirmed live --
+    see notes-final-product.md). Terminal node, like a dead end."""
     speak_id = f"speak_then_transfer_{request_transfer_fn_id}"
-    transfer_fn_id = f"do_{request_transfer_fn_id}"
-    return [
-        freeform_node(
-            speak_id, speak_id.replace("_", "-"),
-            f"Say exactly: {{{{node.{request_transfer_fn_id}.spoken_response}}}} Then transfer the call.",
-            transitions=[always(transfer_fn_id)],
-        ),
-        function_node(
-            transfer_fn_id, transfer_fn_id.replace("_", "-"), "transfer_call",
-            inputs={"destination": f"{{{{node.{request_transfer_fn_id}.transfer_number}}}}"},
-            outputs=[],
-            transitions=[],
-        ),
-    ]
+    return freeform_node(
+        speak_id, speak_id.replace("_", "-"),
+        f"Say exactly: {{{{node.{request_transfer_fn_id}.spoken_response}}}} Then call the "
+        f"transfer_call function with destination set to "
+        f"{{{{node.{request_transfer_fn_id}.transfer_number}}}}.",
+    )
 
 
 for _request_transfer_fn_id in (
@@ -2152,7 +2147,7 @@ for _request_transfer_fn_id in (
     "request_transfer_triage_2_fn",
     "request_transfer_triage_3_fn",
 ):
-    nodes.extend(_real_transfer_chain(_request_transfer_fn_id))
+    nodes.append(_real_transfer_node(_request_transfer_fn_id))
 
 
 def _slot_taken_retry_chain(book_node_id):

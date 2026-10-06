@@ -122,14 +122,21 @@ it freely as more requirements surface. Nothing here is committed to or schedule
 - **Reschedule and cancellation** over the phone. Needs appointment lookup by patient,
   plus a cancellation policy and slot release.
 - **Human escalation / warm transfer -- real for the caller-requested escape hatch,
-  wording-only elsewhere.** Vogent *functions* (not flow nodes) support a native
-  `type: "transfer"`; §5.9's escape hatch now really transfers via `transfer_call`
-  when the resolved number is on Vogent's allowlist (5 mocked test numbers today,
-  real desk numbers need E.164 formatting + registration first). Not yet verified
-  live (empty wallet during dev) -- post-transfer/failure flow behavior is unknown.
-  The automatic no-eligible-doctor dead end still only speaks the number; converting
-  it is easy (reuse `_real_transfer_chain`) but deferred until the escape hatch is
-  verified live first. Urgent-no-slots redirect fallback also still deferred.
+  wording-only elsewhere.** §5.9's escape hatch really transfers via `transfer_call`
+  (a native `type: "transfer"` function) when the resolved number is on Vogent's
+  allowlist (5 mocked test numbers today, real desk numbers need E.164 formatting +
+  registration first).
+  **Live bug found and fixed**: a `transfer_call`-style function has no webhook, so
+  it can't be invoked by a deterministic flow `function_node` (that mechanism just
+  POSTs to a webhook) -- it has to be *linked* to the agent
+  (`linkedFunctionDefinitionIds`) and invoked as a real tool-call decision, prompted
+  in-node the same way `<|hangup|>` already works. Confirmed live twice: without the
+  link, the flow stalled silently after speaking the transfer line, no function-call
+  event ever fired, eventually the caller hung up. Fixed by linking the function and
+  rewording the node to instruct the agent to call it directly -- not yet re-verified
+  live after the fix. The automatic no-eligible-doctor dead end still only speaks the
+  number; converting it now just needs the same prompt pattern, no new node. Urgent-
+  no-slots redirect fallback also still deferred.
 - **Insurance intake -- researched, deliberately deferred beyond carrier + referral.**
   §5.10 currently asks carrier and (when the mocked rule says so) a referral question,
   nothing else. Researched what else a real orthopedic front desk typically collects;
